@@ -1,0 +1,14 @@
+*.json
+
+*.exp
+*.lib
+*.ilk
+
+*.idb
+*.pdb
+
+*.obj
+*.pyd
+
+*.o
+*.so

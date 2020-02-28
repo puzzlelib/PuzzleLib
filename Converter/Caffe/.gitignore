@@ -1,0 +1,11 @@
+*.whl
+*.proto
+*.exe
+
+caffe_pb2.py
+
+*.caffemodel
+*.binaryproto
+
+*.pkl
+*.hdf
