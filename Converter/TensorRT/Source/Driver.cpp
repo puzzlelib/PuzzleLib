@@ -178,6 +178,19 @@ struct ICalibrator : nv::IInt8EntropyCalibrator2
 };
 
 
+template <typename T>
+struct TRTInstance
+{
+	T instance;
+
+	TRTInstance() : instance(nullptr) {}
+	TRTInstance(T instance) : instance(instance) {}
+	~TRTInstance() { if (instance != nullptr) instance->destroy(); }
+
+	T get() { return instance; }
+};
+
+
 void buildRTEngine(nvinfer1::INetworkDefinition *network, nv::IBuilder *builder, int batchsize, int workspace,
 				   DataType mode, ICalibrator *calibrator, std::string savepath)
 {
@@ -194,20 +207,23 @@ void buildRTEngine(nvinfer1::INetworkDefinition *network, nv::IBuilder *builder,
 		builder->setFp16Mode(true);
 	}
 
-	nv::ICudaEngine *engine = builder->buildCudaEngine(*network);
-	if (engine == nullptr)
+	auto enginePtr = builder->buildCudaEngine(*network);
+	if (enginePtr == nullptr)
 		throw std::runtime_error("Failed to create engine");
 
-	auto stream = engine->serialize();
+	TRTInstance<decltype(enginePtr)> engine(enginePtr);
+
+	auto streamPtr = engine.get()->serialize();
+	if (streamPtr == nullptr)
+		throw std::runtime_error("Failed to serialize engine");
+
+	TRTInstance<decltype(streamPtr)> stream(streamPtr);
 
 	std::ofstream file(savepath, std::ios::binary);
 	if (!file.is_open())
 		throw std::invalid_argument("Invalid engine save path: " + savepath);
 
-	file.write(reinterpret_cast<char *>(stream->data()), stream->size());
-	stream->destroy();
-
-	engine->destroy();
+	file.write(reinterpret_cast<char *>(stream.get()->data()), stream.get()->size());
 }
 
 
@@ -215,36 +231,53 @@ void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int ba
 							DataType mode, ICalibrator *calibrator, int workspace, std::string savepath, bool log)
 {
 	ConsoleLogger logger(log);
-	nv::IBuilder *builder = nv::createInferBuilder(logger);
 
-	if (mode == DataType::int8 && !builder->platformHasFastInt8())
+	auto builderPtr = nv::createInferBuilder(logger);
+	if (builderPtr == nullptr)
+		throw std::runtime_error("Failed to create builder");
+
+	TRTInstance<decltype(builderPtr)> builder(builderPtr);
+
+	if (mode == DataType::int8 && !builder.get()->platformHasFastInt8())
 		throw std::invalid_argument("INT8 datatype is not supported on this platform");
 
-	else if (mode == DataType::half && !builder->platformHasFastFp16())
+	else if (mode == DataType::half && !builder.get()->platformHasFastFp16())
 		throw std::invalid_argument("FP16 datatype is not supported on this platform");
 
-	nv::INetworkDefinition *network = builder->createNetwork();
-	nvcaffeparser1::ICaffeParser *parser = nvcaffeparser1::createCaffeParser();
+	auto networkPtr = builder.get()->createNetwork();
+	if (networkPtr == nullptr)
+		throw std::runtime_error("Failed to create network");
+
+	TRTInstance<decltype(networkPtr)> network(networkPtr);
+
+	auto parserPtr = nvcaffeparser1::createCaffeParser();
+	if (parserPtr == nullptr)
+		throw std::runtime_error("Failed to create caffe parser");
+
+	TRTInstance<decltype(parserPtr)> parser(parserPtr);
 
 	CaffePluginFactory factory;
-	parser->setPluginFactory(&factory);
+	parser.get()->setPluginFactory(&factory);
 
-	auto blobNameToTensor = parser->parse(
-		prototxt.c_str(), caffemodel.c_str(), *network, static_cast<nv::DataType>(mode)
+	auto blobNameToTensor = parser.get()->parse(
+		prototxt.c_str(), caffemodel.c_str(), *network.get(), static_cast<nv::DataType>(mode)
 	);
+
+	if (blobNameToTensor == nullptr)
+	{
+		const char *msg = "failed to parse caffe file";
+		logger.log(nvinfer1::ILogger::Severity::kERROR, msg);
+
+		throw std::invalid_argument(msg);
+	}
 
 	for (std::size_t i = 0; i < len(outlayers); i++)
 	{
 		std::string outlayer = py::cast<std::string>(outlayers[i]);
-		network->markOutput(*blobNameToTensor->find(outlayer.c_str()));
+		network.get()->markOutput(*blobNameToTensor->find(outlayer.c_str()));
 	}
 
-	buildRTEngine(network, builder, batchsize, workspace, mode, calibrator, savepath);
-
-	parser->destroy();
-
-	network->destroy();
-	builder->destroy();
+	buildRTEngine(network.get(), builder.get(), batchsize, workspace, mode, calibrator, savepath);
 }
 
 
@@ -252,18 +285,32 @@ void buildRTEngineFromOnnx(std::string onnxname, int batchsize, DataType mode, I
 						   std::string savepath, bool log)
 {
 	ConsoleLogger logger(log);
-	nv::IBuilder *builder = nv::createInferBuilder(logger);
 
-	if (mode == DataType::int8 && !builder->platformHasFastInt8())
+	auto builderPtr = nv::createInferBuilder(logger);
+	if (builderPtr == nullptr)
+		throw std::runtime_error("Failed to create builder");
+
+	TRTInstance<decltype(builderPtr)> builder(builderPtr);
+
+	if (mode == DataType::int8 && !builder.get()->platformHasFastInt8())
 		throw std::invalid_argument("INT8 datatype is not supported on this platform");
 
-	else if (mode == DataType::half && !builder->platformHasFastFp16())
+	else if (mode == DataType::half && !builder.get()->platformHasFastFp16())
 		throw std::invalid_argument("FP16 datatype is not supported on this platform");
 
-	nvinfer1::INetworkDefinition *network = builder->createNetwork();
-	nvonnxparser::IParser *parser = nvonnxparser::createParser(*network, logger);
+	auto networkPtr = builder.get()->createNetwork();
+	if (networkPtr == nullptr)
+		throw std::runtime_error("Failed to create network");
 
-	if (!parser->parseFromFile(onnxname.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING)))
+	TRTInstance<decltype(networkPtr)> network(networkPtr);
+
+	auto parserPtr = nvonnxparser::createParser(*network.get(), logger);
+	if (parserPtr == nullptr)
+		throw std::runtime_error("Failed to create onnx parser");
+
+	TRTInstance<decltype(parserPtr)> parser(parserPtr);
+
+	if (!parser.get()->parseFromFile(onnxname.c_str(), static_cast<int>(nvinfer1::ILogger::Severity::kWARNING)))
 	{
 		const char *msg = "failed to parse onnx file";
 		logger.log(nvinfer1::ILogger::Severity::kERROR, msg);
@@ -271,12 +318,7 @@ void buildRTEngineFromOnnx(std::string onnxname, int batchsize, DataType mode, I
 		throw std::invalid_argument(msg);
 	}
 
-	buildRTEngine(network, builder, batchsize, workspace, mode, calibrator, savepath);
-
-	parser->destroy();
-
-	network->destroy();
-	builder->destroy();
+	buildRTEngine(network.get(), builder.get(), batchsize, workspace, mode, calibrator, savepath);
 }
 
 
@@ -284,80 +326,86 @@ struct Graph
 {
 	ConsoleLogger m_logger;
 
-	nv::IBuilder *m_builder;
-	nv::INetworkDefinition *m_graph;
+	TRTInstance<nv::IBuilder *> m_builder;
+	TRTInstance<nv::INetworkDefinition *> m_graph;
 
 	PluginFactory m_pluginFactory;
 
 
 	Graph(bool log) : m_logger(log)
 	{
-		m_builder = nv::createInferBuilder(m_logger);
-		m_graph = m_builder->createNetwork();
-	}
+		auto builderPtr = nv::createInferBuilder(m_logger);
+		if (builderPtr == nullptr)
+			throw std::runtime_error("Failed to create builder");
 
-	~Graph()
-	{
-		if (m_graph != nullptr) m_graph->destroy();
-		if (m_builder != nullptr) m_builder->destroy();
+		m_builder.instance = builderPtr;
+
+		auto graphPtr = m_builder.get()->createNetwork();
+		if (graphPtr == nullptr)
+			throw std::runtime_error("Failed to create graph");
+
+		m_graph.instance = graphPtr;
 	}
 
 	bool platformHasFastFp16()
 	{
-		return m_builder->platformHasFastFp16();
+		return m_builder.get()->platformHasFastFp16();
 	}
 
 	void setFp16Mode(bool mode)
 	{
-		m_builder->setFp16Mode(mode);
+		m_builder.get()->setFp16Mode(mode);
 	}
 
 	bool platformHasFastInt8()
 	{
-		return m_builder->platformHasFastInt8();
+		return m_builder.get()->platformHasFastInt8();
 	}
 
 	void setInt8Mode(bool mode)
 	{
-		m_builder->setInt8Mode(mode);
+		m_builder.get()->setInt8Mode(mode);
 	}
 
 	void setInt8Calibrator(ICalibrator *calibrator)
 	{
-		m_builder->setInt8Calibrator(calibrator);
+		m_builder.get()->setInt8Calibrator(calibrator);
 	}
 
 	void markOutput(Tensor tensor)
 	{
-		m_graph->markOutput(*tensor.m_tensor);
+		m_graph.get()->markOutput(*tensor.m_tensor);
 	}
 
 	void setMaxBatchSize(int batchsize)
 	{
-		m_builder->setMaxBatchSize(batchsize);
+		m_builder.get()->setMaxBatchSize(batchsize);
 	}
 
 	void setMaxWorkspaceSize(std::size_t size)
 	{
-		m_builder->setMaxWorkspaceSize(size);
+		m_builder.get()->setMaxWorkspaceSize(size);
 	}
 
 	void buildCudaEngine(const char *savepath)
 	{
-		nv::ICudaEngine *engine = m_builder->buildCudaEngine(*m_graph);
-		if (engine == nullptr)
+		auto enginePtr = m_builder.get()->buildCudaEngine(*m_graph.get());
+		if (enginePtr == nullptr)
 			throw std::runtime_error("Failed to create engine");
 
-		auto stream = engine->serialize();
+		TRTInstance<decltype(enginePtr)> engine(enginePtr);
+
+		auto streamPtr = engine.get()->serialize();
+		if (streamPtr == nullptr)
+			throw std::runtime_error("Failed to serialize engine");
+
+		TRTInstance<decltype(streamPtr)> stream(streamPtr);
 
 		std::ofstream file(savepath, std::ios::binary);
 		if (!file.is_open())
 			throw std::invalid_argument("Invalid engine save path: " + std::string(savepath));
 
-		file.write(reinterpret_cast<char *>(stream->data()), stream->size());
-
-		stream->destroy();
-		engine->destroy();
+		file.write(reinterpret_cast<char *>(stream.get()->data()), stream.get()->size());
 	}
 
 	Tensor addInput(const char *name, DataType dtype, py::tuple shape)
@@ -371,7 +419,7 @@ struct Graph
 			dims.d[i] = py::cast<int>(shape[i]);
 		}
 
-		Tensor tensor = {m_graph->addInput(name, static_cast<nv::DataType>(dtype), dims)};
+		Tensor tensor = {m_graph.get()->addInput(name, static_cast<nv::DataType>(dtype), dims)};
 		return tensor;
 	}
 
@@ -402,7 +450,7 @@ struct Graph
 		nv::ILayer *layer = nullptr;
 		if (isDeconvolution)
 		{
-			auto deconv = m_graph->addDeconvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
+			auto deconv = m_graph.get()->addDeconvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
 			deconv->setName(name);
 
 			deconv->setStride(striding);
@@ -412,7 +460,7 @@ struct Graph
 		}
 		else
 		{
-			auto conv = m_graph->addConvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
+			auto conv = m_graph.get()->addConvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
 			conv->setName(name);
 
 			conv->setStride(striding);
@@ -435,7 +483,7 @@ struct Graph
 		nv::Weights scaling = {nv::DataType::kFLOAT, reinterpret_cast<void *>(scaledata), len};
 		nv::Weights power = {nv::DataType::kFLOAT, reinterpret_cast<void *>(powerdata), len};
 
-		auto scale = m_graph->addScale(*input.m_tensor, nv::ScaleMode::kCHANNEL, shift, scaling, power);
+		auto scale = m_graph.get()->addScale(*input.m_tensor, nv::ScaleMode::kCHANNEL, shift, scaling, power);
 		scale->setName(name);
 
 		Tensor tensor = {scale->getOutput(0)};
@@ -444,7 +492,7 @@ struct Graph
 
 	Tensor addActivation(Tensor input, ActivationType type, float alpha, float beta, const char *name)
 	{
-		auto act = m_graph->addActivation(*input.m_tensor, static_cast<nv::ActivationType>(type));
+		auto act = m_graph.get()->addActivation(*input.m_tensor, static_cast<nv::ActivationType>(type));
 
 		act->setAlpha(alpha);
 		act->setBeta(beta);
@@ -458,7 +506,7 @@ struct Graph
 	{
 		auto kernelSize = nv::DimsHW(py::cast<int>(kernel[0]), py::cast<int>(kernel[1]));
 
-		auto pool = m_graph->addPooling(
+		auto pool = m_graph.get()->addPooling(
 			*input.m_tensor, avg ? nv::PoolingType::kAVERAGE : nv::PoolingType::kMAX, kernelSize
 		);
 		pool->setName(name);
@@ -475,7 +523,7 @@ struct Graph
 
 	Tensor addCrossMapLRN(Tensor input, int N, float alpha, float beta, float K, const char *name)
 	{
-		auto lrn = m_graph->addLRN(*input.m_tensor, N, alpha, beta, K);
+		auto lrn = m_graph.get()->addLRN(*input.m_tensor, N, alpha, beta, K);
 		lrn->setName(name);
 
 		Tensor tensor = {lrn->getOutput(0)};
@@ -484,7 +532,7 @@ struct Graph
 
 	Tensor addAdd(Tensor input1, Tensor input2, const char *name)
 	{
-		auto add = m_graph->addElementWise(*input1.m_tensor, *input2.m_tensor, nv::ElementWiseOperation::kSUM);
+		auto add = m_graph.get()->addElementWise(*input1.m_tensor, *input2.m_tensor, nv::ElementWiseOperation::kSUM);
 		add->setName(name);
 
 		Tensor tensor = {add->getOutput(0)};
@@ -501,7 +549,7 @@ struct Graph
 			tensors[i] = tensor.m_tensor;
 		}
 
-		auto concat = m_graph->addConcatenation(&tensors[0], static_cast<int>(tensors.size()));
+		auto concat = m_graph.get()->addConcatenation(&tensors[0], static_cast<int>(tensors.size()));
 		concat->setName(name);
 
 		Tensor tensor = {concat->getOutput(0)};
@@ -510,7 +558,7 @@ struct Graph
 
 	Tensor addFlatten(Tensor input, const char *name)
 	{
-		auto flatten = m_graph->addShuffle(*input.m_tensor);
+		auto flatten = m_graph.get()->addShuffle(*input.m_tensor);
 		flatten->setName(name);
 
 		auto indims = input.m_tensor->getDimensions();
@@ -548,7 +596,7 @@ struct Graph
 		}
 
 		auto indims = input.m_tensor->getDimensions();
-		auto inReshape = m_graph->addShuffle(*input.m_tensor);
+		auto inReshape = m_graph.get()->addShuffle(*input.m_tensor);
 
 		nv::Dims inReshapeDims;
 		inReshapeDims.nbDims = 3;
@@ -557,10 +605,10 @@ struct Graph
 
 		inReshape->setReshapeDimensions(inReshapeDims);
 
-		auto linear = m_graph->addFullyConnected(*inReshape->getOutput(0), outputs, W, bias);
+		auto linear = m_graph.get()->addFullyConnected(*inReshape->getOutput(0), outputs, W, bias);
 		linear->setName(name);
 
-		auto outReshape = m_graph->addShuffle(*linear->getOutput(0));
+		auto outReshape = m_graph.get()->addShuffle(*linear->getOutput(0));
 
 		nv::Dims outReshapeDims;
 		outReshapeDims.nbDims = 1;
@@ -574,7 +622,7 @@ struct Graph
 
 	Tensor addSoftMax(Tensor input, const char *name)
 	{
-		auto softmax = m_graph->addSoftMax(*input.m_tensor);
+		auto softmax = m_graph.get()->addSoftMax(*input.m_tensor);
 		softmax->setName(name);
 
 		Tensor tensor = {softmax->getOutput(0)};
@@ -583,7 +631,7 @@ struct Graph
 
 	Tensor addSwapAxes(Tensor input, int axis1, int axis2, const char *name)
 	{
-		auto swapaxes = m_graph->addShuffle(*input.m_tensor);
+		auto swapaxes = m_graph.get()->addShuffle(*input.m_tensor);
 		swapaxes->setName(name);
 
 		nv::Permutation permutation;
@@ -601,7 +649,7 @@ struct Graph
 
 	Tensor addMoveAxis(Tensor input, int src, int dst, const char *name)
 	{
-		auto moveaxis = m_graph->addShuffle(*input.m_tensor);
+		auto moveaxis = m_graph.get()->addShuffle(*input.m_tensor);
 		moveaxis->setName(name);
 
 		nv::Permutation permutation;
@@ -655,7 +703,7 @@ struct Graph
 			for (std::size_t d = 0; d < inshape.size(); d++)
 				stride.d[d] = 1;
 
-			auto slice = m_graph->addSlice(*input.m_tensor, start, size, stride);
+			auto slice = m_graph.get()->addSlice(*input.m_tensor, start, size, stride);
 
 			auto sliceName = std::string(name) + "_slice_" + std::to_string(i);
 			slice->setName(sliceName.c_str());
@@ -669,7 +717,7 @@ struct Graph
 
 	Tensor addReshape(Tensor input, py::tuple shape, const char *name)
 	{
-		auto reshape = m_graph->addShuffle(*input.m_tensor);
+		auto reshape = m_graph.get()->addShuffle(*input.m_tensor);
 		reshape->setName(name);
 
 		nv::Dims dims;
@@ -697,9 +745,9 @@ struct Graph
 		dims.d[1] = outsize;
 
 		nv::Weights W = {nv::DataType::kFLOAT, reinterpret_cast<void *>(Wdata), Wlen};
-		auto weights = m_graph->addConstant(dims, W);
+		auto weights = m_graph.get()->addConstant(dims, W);
 
-		nv::ILayer *linear = m_graph->addMatrixMultiply(*input.m_tensor, false, *weights->getOutput(0), false);
+		nv::ILayer *linear = m_graph.get()->addMatrixMultiply(*input.m_tensor, false, *weights->getOutput(0), false);
 		linear->setName(name);
 
 		if (biasdata != 0)
@@ -711,10 +759,11 @@ struct Graph
 			biasDims.d[1] = outsize;
 
 			nv::Weights b = {nv::DataType::kFLOAT, reinterpret_cast<void *>(biasdata), biaslen};
+			auto bias = m_graph.get()->addConstant(biasDims, b);
 
-			auto bias = m_graph->addConstant(biasDims, b);
-			linear = m_graph->addElementWise(*linear->getOutput(0), *bias->getOutput(0),
-											 nv::ElementWiseOperation::kSUM);
+			linear = m_graph.get()->addElementWise(
+				*linear->getOutput(0), *bias->getOutput(0), nv::ElementWiseOperation::kSUM
+			);
 		}
 
 		Tensor tensor = {linear->getOutput(0)};
@@ -723,7 +772,7 @@ struct Graph
 
 	Tensor addSum(Tensor input, int axis, const char *name)
 	{
-		auto sum = m_graph->addReduce(*input.m_tensor, nv::ReduceOperation::kSUM, axis, false);
+		auto sum = m_graph.get()->addReduce(*input.m_tensor, nv::ReduceOperation::kSUM, axis, false);
 		sum->setName(name);
 
 		Tensor tensor = {sum->getOutput(0)};
@@ -816,7 +865,7 @@ struct Graph
 				  RNNInputMode inputMode, std::vector<std::size_t> Wdata, std::vector<int64_t> Wlen,
 				  std::vector<std::size_t> biasdata, std::vector<int64_t> biaslen, const char *name)
 	{
-		auto rnn = m_graph->addRNNv2(*input.m_tensor, layers, hsize, seqlen, static_cast<nv::RNNOperation>(mode));
+		auto rnn = m_graph.get()->addRNNv2(*input.m_tensor, layers, hsize, seqlen, static_cast<nv::RNNOperation>(mode));
 		rnn->setName(name);
 
 		rnn->setDirection(static_cast<nv::RNNDirection>(direction));
@@ -849,7 +898,7 @@ struct Graph
 
 	Tensor addUpsample(Tensor input, int scale, const char *name)
 	{
-		auto upsample = m_graph->addResize(*input.m_tensor);
+		auto upsample = m_graph.get()->addResize(*input.m_tensor);
 		upsample->setName(name);
 
 		auto dims = input.m_tensor->getDimensions();
@@ -866,7 +915,7 @@ struct Graph
 	Tensor addPRelu(Tensor input, std::size_t slopedata, int64_t slopelen, const char *name)
 	{
 		auto plugin = m_pluginFactory.createPRelu(reinterpret_cast<float *>(slopedata), slopelen);
-		auto prelu = m_graph->addPluginExt(&input.m_tensor, 1, *plugin);
+		auto prelu = m_graph.get()->addPluginExt(&input.m_tensor, 1, *plugin);
 
 		auto internalName = name + PluginFactory::prelu;
 		prelu->setName(internalName.c_str());
@@ -880,7 +929,7 @@ struct Graph
 		int lpad = pad[0].cast<int>(), rpad = pad[1].cast<int>();
 
 		auto plugin = m_pluginFactory.createReflectPad1D(lpad, rpad);
-		auto reflectpad = m_graph->addPluginExt(&input.m_tensor, 1, *plugin);
+		auto reflectpad = m_graph.get()->addPluginExt(&input.m_tensor, 1, *plugin);
 
 		auto internalName = name + PluginFactory::reflectpad;
 		reflectpad->setName(internalName.c_str());
@@ -909,11 +958,11 @@ struct RTEngine
 {
 	ConsoleLogger m_logger;
 
-	nv::IRuntime *m_infer = nullptr;
-	nv::ICudaEngine *m_engine = nullptr;
-	nv::IExecutionContext *m_context = nullptr;
+	TRTInstance<nv::IRuntime *> m_infer;
+	TRTInstance<nv::ICudaEngine *> m_engine;
+	TRTInstance<nv::IExecutionContext *> m_context;
 
-	IPluginFactory *m_pluginFactory = nullptr;
+	std::unique_ptr<IPluginFactory> m_pluginFactory;
 
 
 	RTEngine(const std::string& path, RTEngineType enginetype, bool log) : m_logger(log)
@@ -924,31 +973,37 @@ struct RTEngine
 
 		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-		m_infer = nv::createInferRuntime(m_logger);
-		if (m_infer == nullptr)
+		auto inferPtr = nv::createInferRuntime(m_logger);
+		if (inferPtr == nullptr)
 			throw std::runtime_error("Failed creating inference runtime");
+
+		m_infer.instance = inferPtr;
 
 		switch (enginetype)
 		{
 			case RTEngineType::puzzle:
-				m_pluginFactory = new PluginFactory();
+				m_pluginFactory = std::make_unique<PluginFactory>();
 				break;
 
 			case RTEngineType::caffe:
-				m_pluginFactory = new CaffePluginFactory();
+				m_pluginFactory = std::make_unique<CaffePluginFactory>();
 				break;
 
 			case RTEngineType::onnx:
 				break;
 		}
 
-		m_engine = m_infer->deserializeCudaEngine(&content[0], content.length(), m_pluginFactory);
-		if (m_engine == nullptr)
+		auto enginePtr = m_infer.get()->deserializeCudaEngine(&content[0], content.length(), m_pluginFactory.get());
+		if (enginePtr == nullptr)
 			throw std::runtime_error("Failed creating engine");
 
-		m_context = m_engine->createExecutionContext();
-		if (m_context == nullptr)
+		m_engine.instance = enginePtr;
+
+		auto contextPtr = m_engine.get()->createExecutionContext();
+		if (contextPtr == nullptr)
 			throw std::runtime_error("Failed creating context");
+
+		m_context.instance = contextPtr;
 	}
 
 	void enqueue(int batchSize, py::list bindings)
@@ -961,16 +1016,7 @@ struct RTEngine
 			buffers.push_back(reinterpret_cast<void *>(binding));
 		}
 
-		m_context->enqueue(batchSize, &buffers[0], nullptr, nullptr);
-	}
-
-	virtual ~RTEngine()
-	{
-		if (m_context != nullptr) m_context->destroy();
-		if (m_engine != nullptr) m_engine->destroy();
-
-		if (m_pluginFactory != nullptr) delete m_pluginFactory;
-		if (m_infer != nullptr) m_infer->destroy();
+		m_context.get()->enqueue(batchSize, &buffers[0], nullptr, nullptr);
 	}
 };
 

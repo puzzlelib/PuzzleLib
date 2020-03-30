@@ -1,85 +1,43 @@
 import itertools
-from enum import Enum
-
 import numpy as np
-
-from PuzzleLib.Cuda.Driver import CuDnn
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.Wrappers.CuDnn import context
-
-from PuzzleLib.Cuda.Utils import dtypesSupported, tile
-from PuzzleLib.Cuda.Kernels.MatVec import matsum
-
-
-class BatchNormMode(Enum):
-	perActivation = CuDnn.BATCHNORM_MODE_PER_ACTIVATION
-	spatial = CuDnn.BATCHNORM_MODE_SPATIAL
-	spatialPersistent = CuDnn.BATCHNORM_MODE_SPATIAL_PERSISTENT
-
-
-def instanceNorm2d(data, scale, bias, epsilon=1e-5, out=None, allocator=None):
-	batchsize, maps, height, width = data.shape
-	extmaps = batchsize * maps
-
-	indata = data.reshape(1, extmaps, height, width)
-
-	mean = GPUArray.empty((extmaps, ), dtype=np.float32, allocator=allocator)
-	var = GPUArray.empty((extmaps, ), dtype=np.float32, allocator=allocator)
-
-	if batchsize > 1:
-		scale = tile(scale, batchsize, axis=0, allocator=allocator)
-		bias = tile(bias, batchsize, axis=0, allocator=allocator)
-
-	outdata, savemean, saveinvvar = context.batchNormNd(
-		indata, mean, var, scale, bias, epsilon, test=False, out=out, allocator=allocator
-	)
-	return outdata.reshape(data.shape), savemean, saveinvvar, scale
-
-
-def instanceNorm2dBackward(grad, data, extscale, savemean, saveinvvar, epsilon, affine=True, out=None, allocator=None):
-	batchsize, maps, height, width = grad.shape
-	extmaps = batchsize * maps
-
-	outgrad = grad.reshape(1, extmaps, height, width)
-	indata = data.reshape(1, extmaps, height, width)
-
-	ingrad, scalegrad, bgrad = context.batchNormNdBackward(
-		outgrad, indata, extscale, savemean, saveinvvar, epsilon, out=out, allocator=allocator
-	)
-
-	if affine and batchsize > 1:
-		scalegrad = matsum(scalegrad.reshape(batchsize, -1), axis=0, allocator=allocator)
-		bgrad = matsum(bgrad.reshape(batchsize, -1), axis=0, allocator=allocator)
-
-	return (ingrad.reshape(grad.shape), scalegrad, bgrad) if affine else ingrad.reshape(grad.shape)
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
-		batchNorm2dTest(dtype, atol)
-		batchNorm3dTest(dtype, atol)
-		instanceNorm2dTest(dtype, atol)
-
-		mapLRN2dTest(dtype, atol)
-		crossMapLRN2dTest(dtype, atol)
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def batchNorm2dTest(dtype, atol):
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		bnd = Backend.getBackend(deviceIdx, initmode=2)
+
+		for dtype, atol in bnd.dtypesSupported():
+			batchNorm2dTest(bnd, dtype, atol, np.float32)
+			batchNorm3dTest(bnd, dtype, atol, np.float32)
+			instanceNorm2dTest(bnd, dtype, atol, np.float32)
+
+			mapLRN2dTest(bnd, dtype, atol)
+			crossMapLRN2dTest(bnd, dtype, atol)
+
+
+def batchNorm2dTest(bnd, dtype, atol, calctype):
 	batchsize, maps, h, w = 4, 5, 2, 3
 	epsilon, norm = 1e-5, batchsize * h * w
 
 	hostData = np.random.randn(batchsize, maps, h, w).astype(dtype)
-	hostScale = np.random.randn(1, maps, 1, 1).astype(np.float32)
-	hostBias = np.random.randn(1, maps, 1, 1).astype(np.float32)
+	hostScale = np.random.randn(1, maps, 1, 1).astype(calctype)
+	hostBias = np.random.randn(1, maps, 1, 1).astype(calctype)
 
-	data, scale, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostScale.ravel()), GPUArray.toGpu(hostBias.ravel())
-	mean, var = GPUArray.zeros(scale.shape, dtype=np.float32), GPUArray.toGpu(np.ones(scale.shape, dtype=np.float32))
+	data = bnd.GPUArray.toGpu(hostData)
+	scale, bias = bnd.GPUArray.toGpu(hostScale.ravel()), bnd.GPUArray.toGpu(hostBias.ravel())
+	mean = bnd.GPUArray.zeros(scale.shape, dtype=calctype)
+	var = bnd.GPUArray.toGpu(np.ones(scale.shape, dtype=calctype))
 
-	outdata, savemean, saveinvvar = context.batchNormNd(data, mean, var, scale, bias, epsilon=epsilon, out=data)
+	outdata, savemean, saveinvvar = bnd.dnn.batchNormNd(data, mean, var, scale, bias, epsilon=epsilon, out=data)
 
-	hostMean = np.sum(hostData, axis=(0, 2, 3), dtype=np.float32, keepdims=True) / norm
+	hostMean = np.sum(hostData, axis=(0, 2, 3), dtype=calctype, keepdims=True) / norm
 
-	hostInvVar = np.sum((hostData - hostMean)**2, axis=(0, 2, 3), dtype=np.float32, keepdims=True) / norm
+	hostInvVar = np.sum((hostData - hostMean)**2, axis=(0, 2, 3), dtype=calctype, keepdims=True) / norm
 	hostInvVar = 1.0 / np.sqrt(hostInvVar + epsilon)
 
 	hostNormData = (hostData - hostMean) * hostInvVar
@@ -91,15 +49,15 @@ def batchNorm2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad, data = GPUArray.toGpu(hostGrad), GPUArray.toGpu(hostData)
-	ingrad, scalegrad, bgrad = context.batchNormNdBackward(grad, data, scale, savemean, saveinvvar, epsilon=epsilon)
+	grad, data = bnd.GPUArray.toGpu(hostGrad), bnd.GPUArray.toGpu(hostData)
+	ingrad, scalegrad, bgrad = bnd.dnn.batchNormNdBackward(grad, data, scale, savemean, saveinvvar, epsilon=epsilon)
 
-	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3), dtype=np.float32, keepdims=True)
-	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3), dtype=np.float32, keepdims=True)
+	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3), dtype=calctype, keepdims=True)
+	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3), dtype=calctype, keepdims=True)
 
 	hostMeanGrad = -hostInvVar * hostBiasGrad * hostScale
 
-	hostVarGrad = np.sum(hostGrad * (hostData - hostMean), axis=(0, 2, 3), dtype=np.float32, keepdims=True)
+	hostVarGrad = np.sum(hostGrad * (hostData - hostMean), axis=(0, 2, 3), dtype=calctype, keepdims=True)
 	hostVarGrad = -0.5 * hostVarGrad * hostScale * hostInvVar**3
 
 	hostInGrad = hostGrad * hostScale * hostInvVar + (2 * hostVarGrad * (hostData - hostMean) + hostMeanGrad) / norm
@@ -112,30 +70,32 @@ def batchNorm2dTest(dtype, atol):
 	hostMean = np.random.randn(*hostMean.shape).astype(np.float32)
 	hostVar = 1.0 + np.random.randn(*hostInvVar.shape).astype(np.float32)**2
 
-	mean, var = GPUArray.toGpu(hostMean.ravel()), GPUArray.toGpu(hostVar.ravel())
-	outdata = context.batchNormNd(data, mean, var, scale, bias, test=True)
+	mean, var = bnd.GPUArray.toGpu(hostMean.ravel()), bnd.GPUArray.toGpu(hostVar.ravel())
+	outdata = bnd.dnn.batchNormNd(data, mean, var, scale, bias, test=True)
 
 	hostOutData = ((hostData - hostMean) / np.sqrt(hostVar + epsilon) * hostScale + hostBias).astype(dtype)
 	assert np.allclose(hostOutData, outdata.get(), atol=atol)
 
 
-def batchNorm3dTest(dtype, atol):
+def batchNorm3dTest(bnd, dtype, atol, calctype):
 	batchsize, maps, d, h, w = 2, 5, 2, 3, 2
 	epsilon, norm = 1e-5, batchsize * d * h * w
 
 	hostData = np.random.randn(batchsize, maps, d, h, w).astype(dtype)
 
-	hostScale = np.random.randn(1, maps, 1, 1, 1).astype(np.float32)
-	hostBias = np.random.randn(1, maps, 1, 1, 1).astype(np.float32)
+	hostScale = np.random.randn(1, maps, 1, 1, 1).astype(calctype)
+	hostBias = np.random.randn(1, maps, 1, 1, 1).astype(calctype)
 
-	data, scale, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostScale.ravel()), GPUArray.toGpu(hostBias.ravel())
-	mean, var = GPUArray.zeros(scale.shape, dtype=np.float32), GPUArray.toGpu(np.ones(scale.shape, dtype=np.float32))
+	data = bnd.GPUArray.toGpu(hostData)
+	scale, bias = bnd.GPUArray.toGpu(hostScale.ravel()), bnd.GPUArray.toGpu(hostBias.ravel())
+	mean = bnd.GPUArray.zeros(scale.shape, dtype=calctype)
+	var = bnd.GPUArray.toGpu(np.ones(scale.shape, dtype=calctype))
 
-	outdata, savemean, saveinvvar = context.batchNormNd(data, mean, var, scale, bias, epsilon=epsilon, out=data)
+	outdata, savemean, saveinvvar = bnd.dnn.batchNormNd(data, mean, var, scale, bias, epsilon=epsilon, out=data)
 
-	hostMean = np.sum(hostData, axis=(0, 2, 3, 4), dtype=np.float32, keepdims=True) / norm
+	hostMean = np.sum(hostData, axis=(0, 2, 3, 4), dtype=calctype, keepdims=True) / norm
 
-	hostInvVar = np.sum((hostData - hostMean) ** 2, axis=(0, 2, 3, 4), dtype=np.float32, keepdims=True) / norm
+	hostInvVar = np.sum((hostData - hostMean) ** 2, axis=(0, 2, 3, 4), dtype=calctype, keepdims=True) / norm
 	hostInvVar = 1.0 / np.sqrt(hostInvVar + epsilon)
 
 	hostNormData = (hostData - hostMean) * hostInvVar
@@ -147,15 +107,15 @@ def batchNorm3dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad, data = GPUArray.toGpu(hostGrad), GPUArray.toGpu(hostData)
-	ingrad, scalegrad, biasgrad = context.batchNormNdBackward(grad, data, scale, savemean, saveinvvar, epsilon=epsilon)
+	grad, data = bnd.GPUArray.toGpu(hostGrad), bnd.GPUArray.toGpu(hostData)
+	ingrad, scalegrad, biasgrad = bnd.dnn.batchNormNdBackward(grad, data, scale, savemean, saveinvvar, epsilon=epsilon)
 
-	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3, 4), dtype=np.float32, keepdims=True)
-	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3, 4), dtype=np.float32, keepdims=True)
+	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3, 4), dtype=calctype, keepdims=True)
+	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3, 4), dtype=calctype, keepdims=True)
 
 	hostMeanGrad = -hostInvVar * hostBiasGrad * hostScale
 
-	hostVarGrad = np.sum(hostGrad * (hostData - hostMean), axis=(0, 2, 3, 4), dtype=np.float32, keepdims=True)
+	hostVarGrad = np.sum(hostGrad * (hostData - hostMean), axis=(0, 2, 3, 4), dtype=calctype, keepdims=True)
 	hostVarGrad = -0.5 * hostVarGrad * hostScale * hostInvVar**3
 
 	hostInGrad = hostGrad * hostScale * hostInvVar + (2 * hostVarGrad * (hostData - hostMean) + hostMeanGrad) / norm
@@ -168,24 +128,25 @@ def batchNorm3dTest(dtype, atol):
 	hostMean = np.random.randn(*hostMean.shape).astype(np.float32)
 	hostVar = 1.0 + np.random.randn(*hostInvVar.shape).astype(np.float32)**2
 
-	mean, var = GPUArray.toGpu(hostMean.ravel()), GPUArray.toGpu(hostVar.ravel())
-	outdata = context.batchNormNd(data, mean, var, scale, bias, test=True)
+	mean, var = bnd.GPUArray.toGpu(hostMean.ravel()), bnd.GPUArray.toGpu(hostVar.ravel())
+	outdata = bnd.dnn.batchNormNd(data, mean, var, scale, bias, test=True)
 
 	hostOutData = ((hostData - hostMean) / np.sqrt(hostVar + epsilon) * hostScale + hostBias).astype(dtype)
 	assert np.allclose(hostOutData, outdata.get(), atol=atol)
 
 
-def instanceNorm2dTest(dtype, atol):
+def instanceNorm2dTest(bnd, dtype, atol, calctype):
 	batchsize, maps, h, w = 3, 4, 5, 5
 	epsilon, norm = 1e-5, h * w
 
 	hostData = np.random.randn(batchsize, maps, h, w).astype(dtype)
 
-	hostScale = np.random.randn(1, maps, 1, 1).astype(np.float32)
-	hostBias = np.random.randn(1, maps, 1, 1).astype(np.float32)
+	hostScale = np.random.randn(1, maps, 1, 1).astype(calctype)
+	hostBias = np.random.randn(1, maps, 1, 1).astype(calctype)
 
-	data, scale, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostScale.ravel()), GPUArray.toGpu(hostBias.ravel())
-	outdata, savemean, saveinvvar, extscale = instanceNorm2d(data, scale, bias, epsilon=epsilon)
+	data = bnd.GPUArray.toGpu(hostData)
+	scale, bias = bnd.GPUArray.toGpu(hostScale.ravel()), bnd.GPUArray.toGpu(hostBias.ravel())
+	outdata, savemean, saveinvvar, extscale = bnd.instanceNorm2d(data, scale, bias, epsilon=epsilon)
 
 	hostExtScale, hostExtBias = np.tile(hostScale, (batchsize, 1, 1, 1)), np.tile(hostBias, (batchsize, 1, 1, 1))
 
@@ -201,11 +162,11 @@ def instanceNorm2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad, scalegrad, bgrad = instanceNorm2dBackward(grad, data, extscale, savemean, saveinvvar, epsilon=epsilon)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad, scalegrad, bgrad = bnd.instanceNorm2dBackward(grad, data, extscale, savemean, saveinvvar, epsilon=epsilon)
 
-	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3), dtype=np.float32, keepdims=True)
-	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3), dtype=np.float32, keepdims=True)
+	hostScaleGrad = np.sum(hostGrad * hostNormData, axis=(0, 2, 3), dtype=calctype, keepdims=True)
+	hostBiasGrad = np.sum(hostGrad, axis=(0, 2, 3), dtype=calctype, keepdims=True)
 
 	hostScGrad = hostGrad * hostExtScale
 	hostCorrs = np.empty(hostInvVar.shape, dtype=np.float32)
@@ -221,7 +182,7 @@ def instanceNorm2dTest(dtype, atol):
 	assert np.allclose(hostBiasGrad.ravel(), bgrad.get(), atol=atol)
 
 
-def mapLRN2dTest(dtype, atol):
+def mapLRN2dTest(bnd, dtype, atol):
 	batchsize, maps, h, w = 2, 2, 9, 10
 	N, alpha, beta, K = 5, 1.0, 0.5, 2.0
 
@@ -230,8 +191,8 @@ def mapLRN2dTest(dtype, atol):
 
 	hostData = np.random.randn(batchsize, maps, h, w).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = context.mapLRN(data, N=N, alpha=alpha, beta=beta, K=K)
+	data = bnd.GPUArray.toGpu(hostData)
+	outdata = bnd.dnn.mapLRN(data, N=N, alpha=alpha, beta=beta, K=K)
 
 	norms = np.empty(hostData.shape, dtype=np.float32)
 
@@ -247,8 +208,8 @@ def mapLRN2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.mapLRNBackward(data, grad, N=N, alpha=alpha, beta=beta, K=K)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.mapLRNBackward(data, grad, N=N, alpha=alpha, beta=beta, K=K)
 
 	hostInGrad = hostGrad / norms**beta
 	k = 2.0 * alpha * beta / N**2
@@ -266,7 +227,7 @@ def mapLRN2dTest(dtype, atol):
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
 
-def crossMapLRN2dTest(dtype, atol):
+def crossMapLRN2dTest(bnd, dtype, atol):
 	batchsize, maps, h, w = 2, 10, 2, 3
 	N, alpha, beta, K = 5, 1.0, 0.5, 2.0
 
@@ -275,8 +236,8 @@ def crossMapLRN2dTest(dtype, atol):
 
 	hostData = np.random.randn(batchsize, maps, h, w).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = context.crossMapLRN(data, N=N, alpha=alpha, beta=beta, K=K)
+	data = bnd.GPUArray.toGpu(hostData)
+	outdata = bnd.dnn.crossMapLRN(data, N=N, alpha=alpha, beta=beta, K=K)
 
 	norms = np.empty((batchsize, maps, h, w), dtype=np.float32)
 
@@ -289,8 +250,8 @@ def crossMapLRN2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.crossMapLRNBackward(data, outdata, grad, N=N, alpha=alpha, beta=beta, K=K)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.crossMapLRNBackward(data, outdata, grad, N=N, alpha=alpha, beta=beta, K=K)
 
 	hostInGrad = hostGrad / norms**beta
 	k = 2.0 * alpha * beta / N

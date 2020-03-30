@@ -1,6 +1,8 @@
 from PuzzleLib import Config
 
 
+backend = None
+
 SharedArray = None
 memoryPool = None
 
@@ -20,10 +22,13 @@ dtypesSupported = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -31,53 +36,58 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda import Utils as CudaUtils
+	from PuzzleLib.Cuda import Backend, Utils
+	initGPU(Backend, Utils)
+
+
+def initHip():
+	from PuzzleLib.Cuda import Utils
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend, Utils)
+
+
+def initGPU(Backend, Utils):
+	global backend
+	backend = Backend.getBackend(Config.deviceIdx, initmode=0)
 
 	global SharedArray, memoryPool, streamManager, globalRng
-	SharedArray = CudaUtils.SharedArray
-	memoryPool = CudaUtils.memoryPool
+	SharedArray = backend.SharedArray
+	memoryPool = backend.memoryPool
 
-	streamManager = CudaUtils.streamManager
-	globalRng = CudaUtils.globalRng
+	streamManager = backend.streamManager
+	globalRng = backend.globalRng
 
-	global copy, concatenate, split, tile
-	copy = CudaUtils.copy
-	concatenate = CudaUtils.concatenate
-	split = CudaUtils.split
-	tile = CudaUtils.tile
+	def wrapCopy(dest, source):
+		return backend.copy(dest, source, allocator=memoryPool)
 
-	global fillUniform, fillNormal
-	fillUniform = CudaUtils.fillUniform
-	fillNormal = CudaUtils.fillNormal
+	def wrapConcatenate(tup, axis, out=None):
+		return backend.concatenate(tup, axis, out, allocator=memoryPool)
 
-	global setupDebugAllocator, dtypesSupported
-	setupDebugAllocator = CudaUtils.setupDebugAllocator
-	dtypesSupported = CudaUtils.dtypesSupported
+	def wrapSplit(ary, sections, axis):
+		return backend.split(ary, sections, axis, allocator=memoryPool)
 
-
-def initOpenCL():
-	from PuzzleLib.OpenCL import Utils as OpenCLUtils
-
-	global SharedArray, memoryPool, streamManager, globalRng
-	SharedArray = OpenCLUtils.SharedArray
-	memoryPool = OpenCLUtils.memoryPool
-
-	streamManager = OpenCLUtils.streamManager
-	globalRng = OpenCLUtils.globalRng
+	def wrapTile(ary, times, axis):
+		return backend.tile(ary, times, axis, allocator=memoryPool)
 
 	global copy, concatenate, split, tile
-	copy = OpenCLUtils.copy
-	concatenate = OpenCLUtils.concatenate
-	split = OpenCLUtils.split
-	tile = OpenCLUtils.tile
+	copy = wrapCopy
+	concatenate = wrapConcatenate
+	split = wrapSplit
+	tile = wrapTile
+
+	def wrapFillUniform(data, minval, maxval, rng):
+		backend.fillUniform(data, minval, maxval, rng)
+
+	def wrapFillNormal(data, mean, stddev, rng):
+		backend.fillNormal(data, mean, stddev, rng)
 
 	global fillUniform, fillNormal
-	fillUniform = OpenCLUtils.fillUniform
-	fillNormal = OpenCLUtils.fillNormal
+	fillUniform = wrapFillUniform
+	fillNormal = wrapFillNormal
 
 	global setupDebugAllocator, dtypesSupported
-	setupDebugAllocator = OpenCLUtils.setupDebugAllocator
-	dtypesSupported = OpenCLUtils.dtypesSupported
+	setupDebugAllocator = lambda: Utils.setupDebugAllocator(backend.GPUArray)
+	dtypesSupported = backend.dtypesSupported
 
 
 def initCPU():

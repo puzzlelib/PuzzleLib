@@ -1,7 +1,7 @@
 import os
 from string import Template
 
-from PuzzleLib.Compiler.Containers.Generate import generateTree
+from PuzzleLib.Compiler.Containers.Tree.Generate import generateTree
 from PuzzleLib.Compiler.Toolchain import createTemplateNames, writeTemplates, buildTemplateTest
 
 

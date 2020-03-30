@@ -1,35 +1,8 @@
-import sys, os, ctypes
+import sys, ctypes
+from PuzzleLib.Intel.ThirdParty.finddnnl import findDNNL
 
 
-_version_list = ["1.2", "1.1"]
-if sys.platform == "linux":
-	_libdnnl_libname_list = ["libdnnl.so.%s" % v for v in _version_list]
-	_libdnnl_libname_list += ["/usr/local/lib/%s" % libname for libname in _libdnnl_libname_list]
-
-elif sys.platform == "darwin":
-	_libdnnl_libname_list = ["libdnnl.%s.dylib" % v for v in _version_list]
-
-elif sys.platform == "win32":
-	libpath = os.path.normpath(os.path.join(os.path.dirname(__file__), "../Libs/"))
-	_libdnnl_libname_list = [os.path.join(libpath, "dnnl.dll")]
-
-else:
-	raise RuntimeError("Unsupported platform for dnnl")
-
-
-_libdnnl = None
-for _libdnnl_libname in _libdnnl_libname_list:
-	try:
-		if sys.platform == "win32":
-			_libdnnl = ctypes.windll.LoadLibrary(_libdnnl_libname)
-		else:
-			_libdnnl = ctypes.cdll.LoadLibrary(_libdnnl_libname)
-	except OSError:
-		pass
-	else:
-		break
-if _libdnnl is None:
-	raise OSError("dnnl library not found (searched for following version(s): %s)" % _version_list)
+_libdnnl = (ctypes.windll if sys.platform == "win32" else ctypes.cdll).LoadLibrary(findDNNL())
 
 
 class dnnlError(Exception):

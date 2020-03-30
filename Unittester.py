@@ -1,13 +1,8 @@
-import sys, os, traceback, gc
-import importlib.util, random, argparse
-
+import sys, os, traceback, gc, random, importlib
 from colorama import Fore, Style
 
 from PuzzleLib import Config
 Config.systemLog = True
-
-from PuzzleLib.Backend.Utils import setupDebugAllocator
-from PuzzleLib.Transformers import Transformer, Generator
 
 
 if "PYCHARM_HOSTED" not in os.environ:
@@ -19,80 +14,65 @@ def runModuleTest(mod, path, threshold=20):
 	itern = 0
 	prevpath = os.getcwd()
 
-	while True:
+	try:
 		os.chdir(path)
-		try:
-			mod.unittest()
 
-		except Exception as e:
-			if isinstance(e, AssertionError):
-				traceinfo = traceback.extract_tb(sys.exc_info()[-1])
-				_, line, _, text = traceinfo[-1]
+		while True:
+			try:
+				mod.unittest()
 
-				e = "An assert error occurred on line %s in statement:\n'%s'" % (line, text)
+			except Exception as e:
+				if isinstance(e, AssertionError):
+					traceinfo = traceback.extract_tb(sys.exc_info()[-1])
+					_, line, _, text = traceinfo[-1]
 
-			print(Fore.YELLOW + "%s unittest failed on try #%s with reason: %s" % (mod, itern + 1, e) + Style.RESET_ALL)
+					e = "An assert error occurred on line %s in statement:\n'%s'" % (line, text)
 
-			if itern < threshold - 1:
-				itern += 1
-				continue
+				print(
+					Fore.YELLOW + "%s unittest failed on try #%s with reason: %s" % (mod, itern + 1, e) +
+					Style.RESET_ALL
+				)
 
-			else:
-				print(Fore.RED + "Threshold limit exceeded" + Style.RESET_ALL)
-				return False
+				if itern < threshold - 1:
+					itern += 1
+					continue
 
-		finally:
-			os.chdir(prevpath)
+				else:
+					print(Fore.RED + "... threshold limit exceeded, skipping ..." + Style.RESET_ALL)
+					return False
 
-		print(Fore.LIGHTGREEN_EX + "%s unittest finished successfully" % mod + Style.RESET_ALL)
-		return True
+			print(Fore.LIGHTGREEN_EX + "%s unittest finished successfully" % mod + Style.RESET_ALL)
+			return True
 
-
-def findAllowedNames(filenames, allowed):
-	if allowed is None:
-		return filenames
-
-	availSourceFiles = []
-
-	for avail in filenames:
-		for allowedfile in allowed:
-			if avail.endswith(os.path.normpath(allowedfile)):
-				availSourceFiles.append(avail)
-
-	return availSourceFiles
+	finally:
+		os.chdir(prevpath)
 
 
-def runUnittests(filenames, systemMods, threshold=20, allowed=None):
-	failure, success, ignored = [], [], []
-	filenames = findAllowedNames(filenames, allowed)
+def runUnittests(filenames, basepath, threshold=20):
+	from PuzzleLib.Backend.Utils import setupDebugAllocator
 
-	print("Setuping debug allocator ...")
+	print("Setting debug allocator ...")
 	setupDebugAllocator()
-
-	if allowed is None:
-		for mod in systemMods + [Transformer, Generator]:
-			if hasattr(mod, "unittest"):
-				if not runModuleTest(mod, os.path.dirname(mod.__file__), threshold=threshold):
-					failure.append(mod.__file__)
 
 	gc.set_debug(gc.DEBUG_UNCOLLECTABLE)
 
+	failure, success, ignored = [], [], []
 	for filename in filenames:
-		spec = importlib.util.spec_from_file_location(os.path.splitext(os.path.basename(filename))[0], filename)
-		mod = importlib.util.module_from_spec(spec)
+		importname = os.path.splitext(os.path.relpath(filename, basepath))[0].replace(os.sep, ".")
 
 		try:
-			spec.loader.exec_module(mod)
+			mod = importlib.import_module("%s.%s" % (Config.libname, importname))
 
 			if hasattr(mod, "unittest") and not hasattr(mod, "main"):
 				print("%s has unittest. Starting ..." % filename)
 
-				dstContainer = success if runModuleTest(mod, os.path.dirname(filename)) else failure
+				dstContainer = success if runModuleTest(mod, os.path.dirname(filename), threshold) else failure
 				dstContainer.append(filename)
 
 				gc.collect()
 
 			else:
+				print("Skipping %s ..." % filename)
 				ignored.append(filename)
 
 		except Exception as e:
@@ -100,146 +80,128 @@ def runUnittests(filenames, systemMods, threshold=20, allowed=None):
 			_, line, _, _ = traceinfo[-1]
 
 			e = "(line: %s, type: %s): %s" % (line, type(e), e)
-			print(Fore.RED + "%s testing failed with reason: %s" % (mod, e) + Style.RESET_ALL)
+			print(Fore.RED + "%s testing failed with reason: %s" % (importname, e) + Style.RESET_ALL)
 
 			failure.append(filename)
-
-	if allowed is not None:
-		print("Ran unittests on allowed files: %s" % filenames)
 
 	return failure, success, ignored
 
 
-def parseArgs():
-	parser = argparse.ArgumentParser()
-
-	parser.add_argument("--allowed", type=str, nargs="*", default=None)
-	parser.add_argument("--exclude", type=str, nargs="*", default=[])
-	parser.add_argument("--threshold", type=int, default=20)
-
-	args = parser.parse_args()
-
-	allowed = None if args.allowed is None else set(args.allowed)
-	exclude, threshold = set(args.exclude), args.threshold
-
-	return allowed, exclude, threshold
-
-
 def prepareBackend(exclude):
-	exclude.update([
-		__file__,
-		"./Transformers/Transformer.py", "./Transformers/Generator.py",
-		"./SetupTools", "./Converter",
-		"./Cuda", "./OpenCL", "./CPU", "./Intel"
-	])
-
 	if Config.backend == Config.Backend.cuda:
-		exclude, systemMods = prepareCudaBackend(exclude)
+		exclude = prepareCudaBackend(exclude)
 
-	elif Config.backend == Config.Backend.opencl:
-		exclude, systemMods = prepareOpenCLBackend(exclude)
+	elif Config.backend == Config.Backend.hip:
+		exclude = prepareHipBackend(exclude)
 
 	elif Config.backend == Config.Backend.cpu:
-		exclude, systemMods = prepareCPUBackend(exclude)
+		exclude = prepareCPUBackend(exclude)
 
 	elif Config.backend == Config.Backend.intel:
-		exclude, systemMods = prepareIntelBackend(exclude)
+		exclude = prepareIntelBackend(exclude)
 
 	else:
 		raise NotImplementedError(Config.backend)
 
-	return exclude, systemMods
+	return exclude
 
 
 def prepareCudaBackend(exclude):
-	from PuzzleLib.Cuda import Utils
-	from PuzzleLib.Cuda.Wrappers import CuDnn, CuBlas
-
-	exclude.discard("./Cuda")
-	exclude.update(["./Cuda/Utils.py", "./Cuda/Wrappers/CuDnn.py", "./Cuda/Wrappers/CuBlas.py"])
-
-	systemMods = [Utils, CuDnn, CuBlas]
-	return exclude, systemMods
+	exclude.discard("Cuda")
+	return exclude
 
 
-def prepareOpenCLBackend(exclude):
-	from PuzzleLib.OpenCL import Utils
-	from PuzzleLib.OpenCL.Wrappers import MIOpen, CLBlas
-
-	exclude.discard("./OpenCL")
-	exclude.update(["./OpenCL/Utils.py", "./OpenCL/Wrappers/MIOpen.py", "./OpenCL/Wrappers/CLBlas.py"])
-
+def prepareHipBackend(exclude):
+	exclude.discard("Hip")
 	exclude.update([
-		"./Modules/LCN.py", "./Modules/SpatialTf.py", "./Modules/Slice.py",
-		"./Modules/BatchNorm3D.py", "./Modules/Conv3D.py", "./Modules/Deconv3D.py",
-		"./Modules/MaxPool3D.py", "./Modules/SubtractMean.py",
-		"./Modules/AvgPool3D.py", "./Modules/AvgPool2D.py", "./Modules/AvgPool1D.py",
-
-		"./Modules/Dropout.py", "./Modules/Dropout2D.py", "./Modules/Cast.py",
-		"./Modules/Pad1D.py", "./Modules/Penalty.py", "./Modules/Pad2D.py",
-
-		"./Cost/CTC.py", "./Modules/RNN.py",
-		"./Models/Nets/UNet.py", "./Models/Nets/WaveToLetter.py",
-		"./Models/Nets/SentiNet.py", "./Models/Nets/Presets/SentiNet.py",
-
-		"./OpenCL/ThirdParty/libclblas.py"
+		"Modules/Pad2D.py", "Modules/Split.py", "Modules/Slice.py",
+		"Modules/MaxPool3D.py", "Modules/AvgPool3D.py", "Modules/SpatialTf.py",
+		"Modules/CrossMapLRN.py", "Modules/LCN.py"
 	])
 
-	systemMods = [Utils, MIOpen, CLBlas]
-	return exclude, systemMods
+	return exclude
 
 
 def prepareCPUBackend(exclude):
-	exclude.discard("./CPU")
-	return exclude, []
+	exclude.discard("CPU")
+
+	exclude.update([
+		"Modules/Conv1D.py", "Modules/Conv2D.py", "Modules/Conv3D.py",
+		"Modules/Deconv1D.py", "Modules/Deconv2D.py", "Modules/Deconv3D.py",
+		"Modules/BatchNorm1D.py", "Modules/BatchNorm2D.py", "Modules/BatchNorm3D.py", "Modules/BatchNorm.py",
+		"Modules/MaxPool1D.py", "Modules/MaxPool2D.py", "Modules/MaxPool3D.py",
+		"Modules/AvgPool1D.py", "Modules/AvgPool2D.py", "Modules/AvgPool3D.py",
+		"Modules/Pad1D.py", "Modules/Pad2D.py", "Modules/Upsample2D.py", "Modules/Upsample3D.py",
+		"Modules/InstanceNorm2D.py", "Modules/MaxUnpool2D.py", "Modules/Cast.py", "Modules/Sum.py",
+		"Modules/DepthConcat.py", "Modules/LCN.py","Modules/PRelu.py", "Modules/RNN.py", "Modules/Embedder.py",
+		"Modules/SpatialTf.py", "Modules/Gelu.py", "Modules/CrossMapLRN.py", "Modules/SoftMax.py", "Modules/MapLRN.py",
+		"Modules/GroupLinear.py", "Modules/SubtractMean.py",
+
+		"Models/Nets/NiN.py", "Models/Nets/VGG.py", "Models/Nets/ResNet.py", "Models/Nets/Inception.py",
+		"Models/Nets/WaveToLetter.py", "Models/Nets/MiniYolo.py", "Models/Nets/UNet.py",
+		"Models/Nets/SentiNet.py", "Models/Nets/Presets/SentiNet.py", "Models/Misc/RBM.py",
+
+		"Cost/CrossEntropy.py", "Cost/BCE.py", "Cost/L1Hinge.py", "Cost/SmoothL1.py", "Cost/KLDivergence.py",
+		"Cost/Hinge.py", "Cost/SVM.py", "Cost/CTC.py",
+
+		"Containers/Sequential.py", "Containers/Parallel.py", "Containers/Graph.py",
+		"Handlers/Trainer.py", "Handlers/Validator.py", "Passes/ConvertToGraph.py",
+
+		"Optimizers/AdaDelta.py", "Optimizers/AdaGrad.py", "Optimizers/Adam.py",
+		"Optimizers/SGD.py", "Optimizers/MomentumSGD.py", "Optimizers/NesterovSGD.py",
+		"Optimizers/RMSProp.py", "Optimizers/RMSPropGraves.py", "Optimizers/SMORMS3.py"
+	])
+
+	return exclude
 
 
 def prepareIntelBackend(exclude):
 	os.environ["OMP_NUM_THREADS"] = str(2)
-	from PuzzleLib.Intel.Wrappers import DNNL
-
-	exclude.difference_update(["./CPU", "./Intel"])
-	exclude.update(["./Intel/Wrappers/DNNL.py"])
+	exclude.difference_update(["CPU", "Intel"])
 
 	exclude.update([
-		"./Modules/Pad1D.py", "./Modules/Pad2D.py", "./Modules/Embedder.py", "./Modules/PRelu.py", "./Modules/Cast.py",
-		"./Modules/Upsample2D.py", "./Modules/Upsample3D.py", "./Modules/MapLRN.py",
-		"./Modules/SubtractMean.py", "./Modules/LCN.py", "./Modules/MaxUnpool2D.py", "./Modules/DepthConcat.py",
-		"./Modules/BatchNorm.py", "./Modules/BatchNorm1D.py", "./Modules/BatchNorm2D.py", "./Modules/BatchNorm3D.py",
-		"./Modules/Sum.py", "./Modules/GroupLinear.py", "./Modules/RNN.py", "./Cost/CTC.py", "./Modules/SpatialTf.py",
-		"./Models/Nets/SentiNet.py", "./Models/Nets/Presets/SentiNet.py"
+		"Modules/Pad1D.py", "Modules/Pad2D.py", "Modules/Embedder.py", "Modules/PRelu.py", "Modules/Cast.py",
+		"Modules/Upsample2D.py", "Modules/Upsample3D.py", "Modules/MapLRN.py", "Modules/Gelu.py",
+		"Modules/SubtractMean.py", "Modules/LCN.py", "Modules/MaxUnpool2D.py", "Modules/DepthConcat.py",
+		"Modules/BatchNorm.py", "Modules/BatchNorm1D.py", "Modules/BatchNorm2D.py", "Modules/BatchNorm3D.py",
+		"Modules/Sum.py", "Modules/GroupLinear.py", "Modules/RNN.py", "Modules/SpatialTf.py",
+		"Cost/CTC.py",
+		"Models/Nets/SentiNet.py", "Models/Nets/Presets/SentiNet.py"
 	])
 
-	systemMods = [DNNL]
-	return exclude, systemMods
+	return exclude
 
 
-def isValidName(path, filename, exclude):
-	if not filename.endswith(".py"):
-		return False
+def gatherTestableFiles(exclude):
+	filenames = []
+	exclude = set(os.path.abspath(file) for file in exclude)
 
-	fullname = os.path.join(path, filename)
+	for dirname, subdirs, names in os.walk(os.getcwd()):
+		files = (os.path.join(dirname, file) for file in names)
+		filenames.extend(file for file in files if isTestableFile(file, exclude))
 
-	if any(file for file in exclude if os.path.commonprefix([fullname, file]) == file):
+	random.shuffle(filenames)
+	return filenames
+
+
+def isTestableFile(filename, exclude):
+	if not filename.endswith(".py") or any(file for file in exclude if os.path.commonprefix((filename, file)) == file):
 		return False
 
 	return True
 
 
 def main():
-	os.chdir(os.path.dirname(os.path.abspath(__file__)))
+	basepath = os.path.dirname(os.path.abspath(__file__))
+	os.chdir(basepath)
 
-	allowed, exclude, threshold = parseArgs()
-	exclude, systemMods = prepareBackend(exclude)
+	exclude = {
+		"Converter",
+		"Cuda", "Hip", "CPU", "Intel"
+	}
 
-	filenames = []
-	exclude = set(os.path.abspath(file) for file in exclude)
-
-	for dirname, subdirs, names in os.walk(os.getcwd()):
-		filenames.extend([os.path.join(dirname, file) for file in names if isValidName(dirname, file, exclude)])
-
-	random.shuffle(filenames)
-	failure, success, ignored = runUnittests(filenames, systemMods, threshold, allowed=allowed)
+	filenames = gatherTestableFiles(prepareBackend(exclude))
+	failure, success, ignored = runUnittests(filenames, basepath, threshold=20)
 
 	print("Checked %s source files: %s" % (len(filenames), filenames))
 	print("Ignored %s files without unittests: %s" % (len(ignored), ignored))

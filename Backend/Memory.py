@@ -10,10 +10,13 @@ transpose = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -21,45 +24,47 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Utils import memoryPool
-	from PuzzleLib.Cuda.Wrappers.CuDnn import context
+	from PuzzleLib.Cuda.Backend import getBackend
 
+	backend = getBackend(Config.deviceIdx, initmode=1)
+	memoryPool, dnn = backend.memoryPool, backend.dnn
+
+	initGPU(memoryPool, dnn)
+
+
+def initHip():
+	from PuzzleLib.Hip.Backend import getBackend
+
+	backend = getBackend(Config.deviceIdx, initmode=2)
+	memoryPool, memmod = backend.memoryPool, backend.memmod
+
+	initGPU(memoryPool, memmod)
+
+
+def initGPU(memoryPool, module):
 	def wrapDepthConcat(data):
-		return context.depthConcat(data, allocator=memoryPool)
+		return module.depthConcat(data, allocator=memoryPool)
 
 	def wrapDepthSplit(grad, indata):
-		return context.depthSplit(grad, indata, allocator=memoryPool)
+		return module.depthSplit(grad, indata, allocator=memoryPool)
 
 	global depthConcat, depthSplit
 	depthConcat = wrapDepthConcat
 	depthSplit = wrapDepthSplit
 
 	def wrapMoveaxis(data, src, dst):
-		return context.moveaxis(data, src, dst, allocator=memoryPool)
+		return module.moveaxis(data, src, dst, allocator=memoryPool)
 
 	def wrapSwapaxes(data, axis1, axis2):
-		return context.swapaxes(data, axis1, axis2, allocator=memoryPool)
+		return module.swapaxes(data, axis1, axis2, allocator=memoryPool)
 
 	def wrapTranspose(data, axes):
-		return context.transpose(data, tuple(axes), allocator=memoryPool)
+		return module.transpose(data, tuple(axes), allocator=memoryPool)
 
 	global moveaxis, swapaxes, transpose
 	moveaxis = wrapMoveaxis
 	swapaxes = wrapSwapaxes
 	transpose = wrapTranspose
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Kernels import Memory
-
-	global depthConcat, depthSplit
-	depthConcat = Memory.depthConcat
-	depthSplit = Memory.depthSplit
-
-	global moveaxis, swapaxes, transpose
-	moveaxis = Memory.moveaxis
-	swapaxes = Memory.swapaxes
-	transpose = Memory.transpose
 
 
 def initCPU():

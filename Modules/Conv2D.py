@@ -85,7 +85,7 @@ def unittest():
 	multiOutMapsTest()
 	multiInMapsTest()
 
-	if Config.backend == Config.Backend.cuda:
+	if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
 		multiMapsWithPadsTest()
 		groupTest()
 

@@ -2,10 +2,7 @@ import itertools
 from string import Template
 
 import numpy as np
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import device, warpSize, roundUpDiv, nthreads, memoryPool as memPool
+from PuzzleLib.Cuda.Utils import roundUpDiv
 
 
 upsampleNearestTmpl = Template("""
@@ -300,176 +297,189 @@ __global__ void upsample3dLinearBackward(float *ingrad, const float *outgrad, in
 """)
 
 
-hblocksize, wblocksize = 4, warpSize
+class UpsampleModule:
+	def __init__(self, backend):
+		self.backend, self.GPUArray = backend, backend.GPUArray
+		self.warpSize, self.nthreads = backend.warpSize, backend.nthreads
+
+		self.hblocksize, self.wblocksize = 4, self.warpSize
+
+		self.nearestMod = backend.SourceModule(upsampleNearestTmpl.substitute(
+			hBlockSize=self.hblocksize, wBlockSize=self.wblocksize
+		))
+		self.linearMod = backend.SourceModule(upsampleLinearTmpl.substitute())
 
 
-if device is not None:
-	nearestMod = SourceModule(upsampleNearestTmpl.substitute(hBlockSize=hblocksize, wBlockSize=wblocksize))
-	linearMod = SourceModule(upsampleLinearTmpl.substitute())
+	def upsample2d(self, data, scale, mode="nearest", allocator=None):
+		batchsize, maps, inh, inw = data.shape
+		hscale, wscale = (scale, scale) if isinstance(scale, int) else scale
+
+		outh, outw = hscale * inh, wscale * inw
+		outdata = self.GPUArray.empty((batchsize, maps, outh, outw), dtype=data.dtype, allocator=allocator)
+
+		if mode == "nearest":
+			block = (self.wblocksize, self.hblocksize, 1)
+			grid = (roundUpDiv(inw, block[0]), roundUpDiv(inh, block[1]), batchsize * maps)
+
+			self.nearestMod.upsample2dNearest(
+				outdata, data, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw),
+				np.int32(hscale), np.int32(wscale), block=block, grid=grid
+			)
+
+		elif mode == "linear":
+			block = (self.warpSize, self.nthreads // self.warpSize, 1)
+			grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), 1)
+
+			rh, rw = (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
+
+			self.linearMod.upsample2dLinear(
+				outdata, data, np.int32(batchsize), np.int32(maps), np.int32(inh), np.int32(inw),
+				np.int32(outh), np.int32(outw), np.float32(rh), np.float32(rw), block=block, grid=grid
+			)
+
+		else:
+			raise NotImplementedError(mode)
+
+		return outdata
 
 
-def upsample2d(data, scale, mode="nearest", allocator=memPool):
-	batchsize, maps, inh, inw = data.shape
-	hscale, wscale = (scale, scale) if isinstance(scale, int) else scale
+	def upsample2dBackward(self, grad, scale, mode="nearest", allocator=None):
+		batchsize, maps, outh, outw = grad.shape
+		hscale, wscale = (scale, scale) if isinstance(scale, int) else scale
 
-	outh, outw = hscale * inh, wscale * inw
-	outdata = GPUArray.empty((batchsize, maps, outh, outw), dtype=data.dtype, allocator=allocator)
+		inh, inw = outh // hscale, outw // wscale
 
-	if mode == "nearest":
-		block = (wblocksize, hblocksize, 1)
-		grid = (roundUpDiv(inw, block[0]), roundUpDiv(inh, block[1]), batchsize * maps)
+		if mode == "nearest":
+			ingrad = self.GPUArray.empty((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
 
-		nearestMod.upsample2dNearest(
-			outdata, data, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw),
-			np.int32(hscale), np.int32(wscale), block=block, grid=grid
-		)
+			blk = self.warpSize * 8
+			block = (blk, 1, 1)
+			grid = (roundUpDiv(ingrad.size, blk), 1, 1)
 
-	elif mode == "linear":
-		block = (warpSize, nthreads // warpSize, 1)
-		grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), 1)
+			self.nearestMod.upsample2dNearestBackward(
+				ingrad, grad, np.int32(inw), np.int32(outw), np.int32(hscale), np.int32(wscale), np.int32(ingrad.size),
+				block=block, grid=grid
+			)
 
-		rh, rw = (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
+		elif mode == "linear":
+			ingrad = self.GPUArray.zeros((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
 
-		linearMod.upsample2dLinear(
-			outdata, data, np.int32(batchsize), np.int32(maps), np.int32(inh), np.int32(inw),
-			np.int32(outh), np.int32(outw), np.float32(rh), np.float32(rw), block=block, grid=grid
-		)
+			block = (self.warpSize, self.nthreads // self.warpSize, 1)
+			grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), 1)
 
-	else:
-		raise NotImplementedError(mode)
+			rh, rw = (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
 
-	return outdata
+			self.linearMod.upsample2dLinearBackward(
+				ingrad, grad, np.int32(batchsize), np.int32(maps), np.int32(inh), np.int32(inw),
+				np.int32(outh), np.int32(outw), np.float32(rh), np.float32(rw), block=block, grid=grid
+			)
 
+		else:
+			raise NotImplementedError(mode)
 
-def upsample2dBackward(grad, scale, mode="nearest", allocator=memPool):
-	batchsize, maps, outh, outw = grad.shape
-	hscale, wscale = (scale, scale) if isinstance(scale, int) else scale
-
-	inh, inw = outh // hscale, outw // wscale
-
-	if mode == "nearest":
-		ingrad = GPUArray.empty((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
-
-		blk = warpSize * 8
-		block = (blk, 1, 1)
-		grid = (roundUpDiv(ingrad.size, blk), 1, 1)
-
-		nearestMod.upsample2dNearestBackward(
-			ingrad, grad, np.int32(inw), np.int32(outw), np.int32(hscale), np.int32(wscale), np.int32(ingrad.size),
-			block=block, grid=grid
-		)
-
-	elif mode == "linear":
-		ingrad = GPUArray.zeros((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
-
-		block = (warpSize, nthreads // warpSize, 1)
-		grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), 1)
-
-		rh, rw = (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
-
-		linearMod.upsample2dLinearBackward(
-			ingrad, grad, np.int32(batchsize), np.int32(maps), np.int32(inh), np.int32(inw),
-			np.int32(outh), np.int32(outw), np.float32(rh), np.float32(rw), block=block, grid=grid
-		)
-
-	else:
-		raise NotImplementedError(mode)
-
-	return ingrad
+		return ingrad
 
 
-def upsample3d(data, scale, mode="nearest", allocator=memPool):
-	batchsize, maps, ind, inh, inw = data.shape
-	dscale, hscale, wscale = (scale, scale, scale) if isinstance(scale, int) else scale
+	def upsample3d(self, data, scale, mode="nearest", allocator=None):
+		batchsize, maps, ind, inh, inw = data.shape
+		dscale, hscale, wscale = (scale, scale, scale) if isinstance(scale, int) else scale
 
-	outd, outh, outw = dscale * ind, hscale * inh, wscale * inw
-	outdata = GPUArray.empty((batchsize, maps, outd, outh, outw), dtype=data.dtype, allocator=allocator)
+		outd, outh, outw = dscale * ind, hscale * inh, wscale * inw
+		outdata = self.GPUArray.empty((batchsize, maps, outd, outh, outw), dtype=data.dtype, allocator=allocator)
 
-	if mode == "nearest":
-		block = (wblocksize, hblocksize, 1)
-		grid = (roundUpDiv(inw, block[0]), roundUpDiv(inh, block[1]), batchsize * maps * ind)
+		if mode == "nearest":
+			block = (self.wblocksize, self.hblocksize, 1)
+			grid = (roundUpDiv(inw, block[0]), roundUpDiv(inh, block[1]), batchsize * maps * ind)
 
-		nearestMod.upsample3dNearest(
-			outdata, data, np.int32(ind), np.int32(inh), np.int32(inw),
-			np.int32(outd), np.int32(outh), np.int32(outw), np.int32(dscale), np.int32(hscale), np.int32(wscale),
-			block=block, grid=grid
-		)
+			self.nearestMod.upsample3dNearest(
+				outdata, data, np.int32(ind), np.int32(inh), np.int32(inw),
+				np.int32(outd), np.int32(outh), np.int32(outw), np.int32(dscale), np.int32(hscale), np.int32(wscale),
+				block=block, grid=grid
+			)
 
-	elif mode == "linear":
-		block = (warpSize, nthreads // warpSize, 1)
-		grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), outd)
+		elif mode == "linear":
+			block = (self.warpSize, self.nthreads // self.warpSize, 1)
+			grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), outd)
 
-		rd, rh, rw = (ind - 1) / (outd - 1), (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
+			rd, rh, rw = (ind - 1) / (outd - 1), (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
 
-		linearMod.upsample3dLinear(
-			outdata, data, np.int32(batchsize), np.int32(maps), np.int32(ind), np.int32(inh), np.int32(inw),
-			np.int32(outd), np.int32(outh), np.int32(outw), np.float32(rd), np.float32(rh), np.float32(rw),
-			block=block, grid=grid
-		)
+			self.linearMod.upsample3dLinear(
+				outdata, data, np.int32(batchsize), np.int32(maps), np.int32(ind), np.int32(inh), np.int32(inw),
+				np.int32(outd), np.int32(outh), np.int32(outw), np.float32(rd), np.float32(rh), np.float32(rw),
+				block=block, grid=grid
+			)
 
-	else:
-		raise NotImplementedError(mode)
+		else:
+			raise NotImplementedError(mode)
 
-	return outdata
+		return outdata
 
 
-def upsample3dBackward(grad, scale, mode="nearest", allocator=memPool):
-	batchsize, maps, outd, outh, outw = grad.shape
-	dscale, hscale, wscale = (scale, scale, scale) if isinstance(scale, int) else scale
+	def upsample3dBackward(self, grad, scale, mode="nearest", allocator=None):
+		batchsize, maps, outd, outh, outw = grad.shape
+		dscale, hscale, wscale = (scale, scale, scale) if isinstance(scale, int) else scale
 
-	ind, inh, inw = outd // dscale, outh // hscale, outw // wscale
+		ind, inh, inw = outd // dscale, outh // hscale, outw // wscale
 
-	if mode == "nearest":
-		ingrad = GPUArray.empty((batchsize, maps, ind, inh, inw), dtype=grad.dtype, allocator=allocator)
+		if mode == "nearest":
+			ingrad = self.GPUArray.empty((batchsize, maps, ind, inh, inw), dtype=grad.dtype, allocator=allocator)
 
-		blk = warpSize * 8
-		block = (blk, 1, 1)
+			blk = self.warpSize * 8
+			block = (blk, 1, 1)
 
-		grid = (roundUpDiv(ingrad.size, blk), 1, 1)
+			grid = (roundUpDiv(ingrad.size, blk), 1, 1)
 
-		nearestMod.upsample3dNearestBackward(
-			ingrad, grad, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw),
-			np.int32(dscale), np.int32(hscale), np.int32(wscale), np.int32(ingrad.size), block=block, grid=grid
-		)
+			self.nearestMod.upsample3dNearestBackward(
+				ingrad, grad, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw),
+				np.int32(dscale), np.int32(hscale), np.int32(wscale), np.int32(ingrad.size), block=block, grid=grid
+			)
 
-	elif mode == "linear":
-		ingrad = GPUArray.zeros((batchsize, maps, ind, inh, inw), dtype=grad.dtype, allocator=allocator)
+		elif mode == "linear":
+			ingrad = self.GPUArray.zeros((batchsize, maps, ind, inh, inw), dtype=grad.dtype, allocator=allocator)
 
-		block = (warpSize, nthreads // warpSize, 1)
-		grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), outd)
+			block = (self.warpSize, self.nthreads // self.warpSize, 1)
+			grid = (roundUpDiv(outw, block[0]), roundUpDiv(outh, block[1]), outd)
 
-		rd, rh, rw = (ind - 1) / (outd - 1), (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
+			rd, rh, rw = (ind - 1) / (outd - 1), (inh - 1) / (outh - 1), (inw - 1) / (outw - 1)
 
-		linearMod.upsample3dLinearBackward(
-			ingrad, grad, np.int32(batchsize), np.int32(maps), np.int32(ind), np.int32(inh), np.int32(inw),
-			np.int32(outd), np.int32(outh), np.int32(outw), np.float32(rd), np.float32(rh), np.float32(rw),
-			block=block, grid=grid
-		)
+			self.linearMod.upsample3dLinearBackward(
+				ingrad, grad, np.int32(batchsize), np.int32(maps), np.int32(ind), np.int32(inh), np.int32(inw),
+				np.int32(outd), np.int32(outh), np.int32(outw), np.float32(rd), np.float32(rh), np.float32(rw),
+				block=block, grid=grid
+			)
 
-	else:
-		raise NotImplementedError(mode)
+		else:
+			raise NotImplementedError(mode)
 
-	return ingrad
+		return ingrad
 
 
 def unittest():
-	upsample2dNearestTest()
-	upsample2dLinearTest()
-	upsample2dSpeedTest()
-
-	upsample3dNearestTest()
-	upsample3dLinearTest()
-	upsample3dSpeedTest()
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def upsample2dNearestTest():
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = UpsampleModule(Backend.getBackend(deviceIdx))
+
+		upsample2dNearestTest(module)
+		upsample2dLinearTest(module)
+		upsample2dSpeedTest(module)
+
+		upsample3dNearestTest(module)
+		upsample3dLinearTest(module)
+		upsample3dSpeedTest(module)
+
+
+def upsample2dNearestTest(module):
 	batchsize, maps, inh, inw = 1, 2, 16, 15
 	scale = 2
 
 	hostData = np.random.uniform(low=-1.0, high=1.0, size=(batchsize, maps, inh, inw)).astype(np.float32)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = upsample2d(data, scale, mode="nearest")
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.upsample2d(data, scale, mode="nearest")
 
 	hostOutData = np.empty(outdata.shape, dtype=np.float32)
 
@@ -480,8 +490,8 @@ def upsample2dNearestTest():
 
 	hostGrad = np.random.randn(*outdata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = upsample2dBackward(grad, scale)
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.upsample2dBackward(grad, scale)
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -493,14 +503,14 @@ def upsample2dNearestTest():
 	assert np.allclose(hostInGrad, ingrad.get(), atol=1e-5)
 
 
-def upsample2dLinearTest():
+def upsample2dLinearTest(module):
 	batchsize, maps, inh, inw = 3, 2, 4, 4
 	hscale, wscale = 2, 3
 
 	hostData = np.random.randn(batchsize, maps, inh, inw).astype(np.float32)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = upsample2d(data, (hscale, wscale), mode="linear")
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.upsample2d(data, (hscale, wscale), mode="linear")
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 	rh, rw = (inh - 1) / (inh * hscale - 1), (inw - 1) / (inw * wscale - 1)
@@ -517,8 +527,8 @@ def upsample2dLinearTest():
 
 	hostGrad = np.random.randn(*outdata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = upsample2dBackward(grad, (hscale, wscale), mode="linear")
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.upsample2dBackward(grad, (hscale, wscale), mode="linear")
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -537,14 +547,14 @@ def upsample2dLinearTest():
 	assert np.allclose(hostInGrad, ingrad.get(), atol=1e-5)
 
 
-def upsample3dNearestTest():
+def upsample3dNearestTest(module):
 	batchsize, maps, ind, inh, inw = 4, 2, 3, 5, 3
 	scale = 2
 
 	hostData = np.random.randn(batchsize, maps, ind, inh, inw).astype(np.float32)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = upsample3d(data, scale, mode="nearest")
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.upsample3d(data, scale, mode="nearest")
 
 	hostOutData = np.empty(outdata.shape, dtype=np.float32)
 
@@ -556,8 +566,8 @@ def upsample3dNearestTest():
 
 	hostGrad = np.random.randn(*outdata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = upsample3dBackward(grad, scale)
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.upsample3dBackward(grad, scale)
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -569,14 +579,14 @@ def upsample3dNearestTest():
 	assert np.allclose(hostInGrad, ingrad.get())
 
 
-def upsample3dLinearTest():
+def upsample3dLinearTest(module):
 	batchsize, maps, ind, inh, inw = 1, 2, 2, 2, 2
 	dscale, hscale, wscale = 2, 2, 1
 
 	hostData = np.random.randn(batchsize, maps, ind, inh, inw).astype(np.float32)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = upsample3d(data, (dscale, hscale, wscale), mode="linear")
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.upsample3d(data, (dscale, hscale, wscale), mode="linear")
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 	rd, rh, rw = (ind - 1) / (ind * dscale - 1), (inh - 1) / (inh * hscale - 1), (inw - 1) / (inw * wscale - 1)
@@ -605,8 +615,8 @@ def upsample3dLinearTest():
 
 	hostGrad = np.random.randn(*outdata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = upsample3dBackward(grad, (dscale, hscale, wscale), mode="linear")
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.upsample3dBackward(grad, (dscale, hscale, wscale), mode="linear")
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -635,28 +645,26 @@ def upsample3dLinearTest():
 	assert np.allclose(hostInGrad, ingrad.get())
 
 
-def upsample2dSpeedTest():
-	from PuzzleLib.Cuda.Benchmarks.Utils import timeKernel
-
+def upsample2dSpeedTest(module):
 	batchsize, maps, inh, inw = 32, 16, 32, 32
 	scale = 2
 
-	data = GPUArray.toGpu(np.random.randn(batchsize, maps, inh, inw).astype(np.float32))
+	data = module.GPUArray.toGpu(np.random.randn(batchsize, maps, inh, inw).astype(np.float32))
 
-	timeKernel(upsample2d, args=(data, scale, "nearest", memPool), logname="nearest 2d mode")
-	timeKernel(upsample2d, args=(data, scale, "linear", memPool), logname="linear 2d mode")
+	bnd = module.backend
+	bnd.timeKernel(module.upsample2d, args=(data, scale, "nearest", bnd.memoryPool), logname="nearest 2d mode")
+	bnd.timeKernel(module.upsample2d, args=(data, scale, "linear", bnd.memoryPool), logname="linear 2d mode")
 
 
-def upsample3dSpeedTest():
-	from PuzzleLib.Cuda.Benchmarks.Utils import timeKernel
-
+def upsample3dSpeedTest(module):
 	batchsize, maps, ind, inh, inw = 32, 16, 4, 32, 32
 	scale = 2
 
-	data = GPUArray.toGpu(np.random.randn(batchsize, maps, ind, inh, inw).astype(np.float32))
+	data = module.GPUArray.toGpu(np.random.randn(batchsize, maps, ind, inh, inw).astype(np.float32))
 
-	timeKernel(upsample3d, args=(data, scale, "nearest", memPool), logname="nearest 3d mode")
-	timeKernel(upsample3d, args=(data, scale, "linear", memPool), logname="linear 3d mode")
+	bnd = module.backend
+	bnd.timeKernel(module.upsample3d, args=(data, scale, "nearest", bnd.memoryPool), logname="nearest 3d mode")
+	bnd.timeKernel(module.upsample3d, args=(data, scale, "linear", bnd.memoryPool), logname="linear 3d mode")
 
 
 if __name__ == "__main__":

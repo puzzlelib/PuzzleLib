@@ -5,6 +5,9 @@ from PuzzleLib.Compiler.Codegen.Types import void_t, float_t, double_t, ptrdiff_
 from PuzzleLib.Compiler.Codegen.Types import schar_t, short_t, int_t, llong_t, int8_t, int16_t, int32_t, int64_t
 from PuzzleLib.Compiler.Codegen.Types import uchar_t, ushort_t, uint_t, ullong_t, uint8_t, uint16_t, uint32_t, uint64_t
 
+from PuzzleLib.Compiler.Toolchain import guessToolchain
+from PuzzleLib.Compiler.JIT import extensionFromString, stdCachePath
+
 
 funcTmpl = Template("""
 static PyObject *${modname}_$funcname(PyObject *self, PyObject *args)
@@ -186,12 +189,9 @@ static void test2(void)
 		("test2", void_t, [])
 	])
 
-	from PuzzleLib.Compiler.Toolchain import guessToolchain
-	from PuzzleLib.Compiler.JIT import extensionFromString
-
 	source = "#include <Python.h>\n%s%s" % (functions, binding)
 	mod = extensionFromString(
-		guessToolchain(verbose=2), "module", source, cachepath=os.path.join("PuzzleLib", "tests"), recompile=True
+		guessToolchain(verbose=2), "module", source, cachepath=os.path.join(stdCachePath, "tests"), recompile=True
 	)
 
 	assert mod.test(2, 2) == 4

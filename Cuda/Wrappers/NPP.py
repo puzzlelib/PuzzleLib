@@ -2,10 +2,6 @@ import ctypes
 from enum import Enum
 
 import numpy as np
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.Utils import memoryPool as memPool
-
 from PuzzleLib.Cuda.ThirdParty import libnpp
 
 
@@ -111,8 +107,7 @@ def getOutDataRect(data, outshape, memoryType):
 
 
 def getDataPointers(data, outdata, memoryType):
-	dataPtr = data.ptr
-	outdataPtr = outdata.ptr
+	dataPtr, outdataPtr = data.ptr, outdata.ptr
 
 	if isPlanarMemoryType(memoryType):
 		dataPtr = [data.ptr + data.strides[0] * i for i in range(data.shape[0])]
@@ -124,7 +119,7 @@ def getDataPointers(data, outdata, memoryType):
 	return dataPtr, outdataPtr
 
 
-def rescale(data, scale, memoryType, interpolation=InterpolationMode.nn, outdata=None, allocator=memPool):
+def rescale(backend, data, scale, memoryType, interpolation=InterpolationMode.nn, outdata=None, allocator=None):
 	assert data.ndim == 2 and memoryType == MemoryType.grayscale or data.ndim == 3
 	hscale, wscale = (scale, scale) if isinstance(scale, (int, float)) else scale
 
@@ -137,7 +132,7 @@ def rescale(data, scale, memoryType, interpolation=InterpolationMode.nn, outdata
 	outshape = getOutDataShape(data, outrect, memoryType)
 
 	if outdata is None:
-		outdata = GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
+		outdata = backend.GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
 	else:
 		assert outdata.shape == outshape
 
@@ -151,35 +146,31 @@ def rescale(data, scale, memoryType, interpolation=InterpolationMode.nn, outdata
 	return outdata
 
 
-def resize(data, outshape, memoryType, interpolation=InterpolationMode.nn, outdata=None, allocator=memPool):
+def resize(backend, data, outshape, memoryType, interpolation=InterpolationMode.nn, outdata=None, allocator=None):
 	inrect = getDataRect(data, memoryType)
 	outrect = getOutDataRect(data, outshape, memoryType)
 
 	hscale, wscale = outrect[3] / inrect[3], outrect[2] / inrect[2]
-	return rescale(data, (hscale, wscale), memoryType, interpolation, outdata=outdata, allocator=allocator)
+	return rescale(backend, data, (hscale, wscale), memoryType, interpolation, outdata=outdata, allocator=allocator)
 
 
-def warpAffine(data, coeffs, memoryType, outshape=None, interpolation=InterpolationMode.nn, cval=0, backward=False,
-			   allocator=memPool):
+def warpAffine(backend, data, coeffs, memoryType, outshape=None, interpolation=InterpolationMode.nn, cval=0,
+			   backward=False, allocator=None):
 	assert data.ndim == 2 and memoryType == MemoryType.grayscale or data.ndim == 3
 
 	inrect = getDataRect(data, memoryType)
 	insize, inline = (inrect[2], inrect[3]), getMemoryTypeLineSize(inrect[2], data.dtype, memoryType)
 
-	if outshape is None:
-		outshape = data.shape
+	outshape = data.shape if outshape is None else outshape
 
 	outrect = getOutDataRect(data, outshape, memoryType)
 	outline = getMemoryTypeLineSize(outrect[2], data.dtype, memoryType)
 
-	outdata = GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
+	outdata = backend.GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
 	outdata.fill(cval)
 
 	dataPtr, outdataPtr = getDataPointers(data, outdata, memoryType)
-
-	warpMethod = libnpp.nppiWarpAffine
-	if backward:
-		warpMethod = libnpp.nppiWarpAffineBack
+	warpMethod = libnpp.nppiWarpAffineBack if backward else libnpp.nppiWarpAffine
 
 	warpMethod(
 		getDataType(data).value, memoryType.value, dataPtr, insize, inline, inrect, outdataPtr,
@@ -228,8 +219,8 @@ def genAffineQuads(inpoints, outpoints, clip, inrect):
 	return srcQuad, dstQuad
 
 
-def warpAffinePoints(data, inpoints, outpoints, memoryType, outshape=None, interpolation=InterpolationMode.nn, cval=0,
-					 clip=True, allocator=memPool):
+def warpAffinePoints(backend, data, inpoints, outpoints, memoryType, outshape=None, interpolation=InterpolationMode.nn,
+					 cval=0, clip=True, allocator=None):
 	assert data.ndim == 2 and memoryType == MemoryType.grayscale or data.ndim == 3
 
 	inrect = getDataRect(data, memoryType)
@@ -241,7 +232,7 @@ def warpAffinePoints(data, inpoints, outpoints, memoryType, outshape=None, inter
 	outrect = getOutDataRect(data, outshape, memoryType)
 	outline = getMemoryTypeLineSize(outrect[2], data.dtype, memoryType)
 
-	outdata = GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
+	outdata = backend.GPUArray.empty(outshape, dtype=data.dtype, allocator=allocator)
 	outdata.fill(cval)
 
 	dataPtr, outdataPtr = getDataPointers(data, outdata, memoryType)
@@ -256,22 +247,32 @@ def warpAffinePoints(data, inpoints, outpoints, memoryType, outshape=None, inter
 
 
 def unittest():
-	resizeWidePixelTest()
-	resizePlanarTest()
-	warpAffineTest()
-	warpAffinePointsTest()
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def resizeWidePixelTest():
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		bnd = Backend.getBackend(deviceIdx)
+
+		resizeWidePixelTest(bnd)
+		resizePlanarTest(bnd)
+		warpAffineTest(bnd)
+		warpAffinePointsTest(bnd)
+
+
+def resizeWidePixelTest(bnd):
 	inh, inw = 2, 4
 	hscale, wscale = 2.5, 1.5
 
-	data = GPUArray.toGpu(np.random.randn(inh, inw, 3).astype(np.float32))
+	hostData = np.random.randn(inh, inw, 3).astype(np.float32)
+	data = bnd.GPUArray.toGpu(hostData)
 
-	outdata = rescale(data, scale=(hscale, wscale), memoryType=MemoryType.rgb, interpolation=InterpolationMode.linear)
-	outresdata = resize(data, outdata.shape, memoryType=MemoryType.rgb, interpolation=InterpolationMode.linear)
+	outdata = rescale(
+		bnd, data, scale=(hscale, wscale), memoryType=MemoryType.rgb, interpolation=InterpolationMode.linear
+	)
+	outresdata = resize(bnd, data, outdata.shape, memoryType=MemoryType.rgb, interpolation=InterpolationMode.linear)
 
-	hostData = data.get()
 	hostOutData = np.empty((int(inh * hscale), int(inw * wscale), 3), dtype=data.dtype)
 
 	def hostResizeWide(hostDat, hostOutDat):
@@ -301,20 +302,20 @@ def resizeWidePixelTest():
 	assert np.allclose(hostOutData, outresdata.get())
 
 
-def resizePlanarTest():
+def resizePlanarTest(bnd):
 	inh, inw = 2, 4
 	hscale, wscale = 2.5, 1.5
 
-	data = GPUArray.toGpu(np.random.randn(3, inh, inw).astype(np.float32))
+	hostData = np.random.randn(3, inh, inw).astype(np.float32)
+	data = bnd.GPUArray.toGpu(hostData)
 
 	outdata = rescale(
-		data, scale=(hscale, wscale), memoryType=MemoryType.rgbPlanar, interpolation=InterpolationMode.linear
+		bnd, data, scale=(hscale, wscale), memoryType=MemoryType.rgbPlanar, interpolation=InterpolationMode.linear
 	)
 	outresdata = resize(
-		data, outdata.shape, memoryType=MemoryType.rgbPlanar, interpolation=InterpolationMode.linear
+		bnd, data, outdata.shape, memoryType=MemoryType.rgbPlanar, interpolation=InterpolationMode.linear
 	)
 
-	hostData = data.get()
 	hostOutData = np.empty((3, int(inh * hscale), int(inw * wscale)), dtype=data.dtype)
 
 	def hostResizePlanar(hostDat, hostOutDat):
@@ -344,7 +345,7 @@ def resizePlanarTest():
 	assert np.allclose(hostOutData, outresdata.get())
 
 
-def warpAffineTest():
+def warpAffineTest(bnd):
 	inh, inw = 4, 4
 	outh, outw = 10, 10
 
@@ -357,18 +358,18 @@ def warpAffineTest():
 	invMat = np.linalg.inv(mat)
 	mat = list(mat[:2].ravel())
 
-	data = GPUArray.toGpu(np.random.randn(inh, inw, 3).astype(np.float32))
+	hostData = np.random.randn(inh, inw, 3).astype(np.float32)
+	data = bnd.GPUArray.toGpu(hostData)
 
 	outdata = warpAffine(
-		data, mat, memoryType=MemoryType.rgb, outshape=(outh, outw, 3), interpolation=InterpolationMode.nn
+		bnd, data, mat, memoryType=MemoryType.rgb, outshape=(outh, outw, 3), interpolation=InterpolationMode.nn
 	)
 
 	outbackdata = warpAffine(
-		data, list(invMat[:2].ravel()), memoryType=MemoryType.rgb, outshape=(outh, outw, 3),
+		bnd, data, list(invMat[:2].ravel()), memoryType=MemoryType.rgb, outshape=(outh, outw, 3),
 		interpolation=InterpolationMode.nn, backward=True
 	)
 
-	hostData = data.get()
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 
 	for y in range(hostOutData.shape[0]):
@@ -383,23 +384,22 @@ def warpAffineTest():
 	assert np.allclose(hostOutData, outbackdata.get())
 
 
-def warpAffinePointsTest():
+def warpAffinePointsTest(bnd):
 	inh, inw = 4, 4
 	outh, outw = 4, 4
 
 	inpoints = [[0, inw], [0, 0], [inh, 0]]
 	outpoints = [[outw, 0], [0, 0], [0, outh]]
 
-	data = GPUArray.toGpu(np.random.randn(inh, inw, 3).astype(np.float32))
+	hostData = np.random.randn(inh, inw, 3).astype(np.float32)
+	data = bnd.GPUArray.toGpu(hostData)
 
 	outdata = warpAffinePoints(
-		data, inpoints, outpoints, memoryType=MemoryType.rgb, outshape=(outh, outw, 3),
+		bnd, data, inpoints, outpoints, memoryType=MemoryType.rgb, outshape=(outh, outw, 3),
 		interpolation=InterpolationMode.nn
 	)
 
-	hostData = data.get()
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
-
 	dx, dy = outpoints[1][0] - inpoints[1][0], outpoints[1][1] - inpoints[1][1]
 
 	A = np.array([

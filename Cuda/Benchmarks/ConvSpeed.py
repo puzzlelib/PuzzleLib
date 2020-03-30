@@ -1,5 +1,5 @@
 import numpy as np
-from PuzzleLib.Cuda.Wrappers import CuDnn
+from PuzzleLib import Config
 
 
 def main():
@@ -7,11 +7,15 @@ def main():
 	Wshape = (64, 32, 11, 11)
 
 	stride, pad, dilation, groups = 1, 0, 1, datashape[1] // Wshape[1]
-	timeConv(datashape, Wshape, np.float32, stride, pad, dilation, groups)
+
+	from PuzzleLib.Cuda.Backend import getBackend
+	backend = getBackend(Config.deviceIdx, initmode=1)
+
+	timeConv(backend, datashape, Wshape, np.float32, stride, pad, dilation, groups)
 
 
-def timeConv(datashape, Wshape, dtype, stride, pad, dilation, groups):
-	fwdResults, bwdDataResults, bwdFilterResults = CuDnn.convNdbenchmark(
+def timeConv(backend, datashape, Wshape, dtype, stride, pad, dilation, groups):
+	fwdResults, bwdDataResults, bwdFilterResults = backend.convNdbenchmark(
 		datashape, Wshape, dtype, stride, pad, dilation, groups
 	)
 

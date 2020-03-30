@@ -13,28 +13,46 @@ def buildDriver():
 	build(rules, linkrule)
 	cc.clearPath("..")
 
+	return linkrule.target
+
+
+def findLibraryPath():
+	TRT_PATH = os.environ.get("TRT_PATH", None)
+
+	if TRT_PATH is None:
+		if sys.platform == "linux":
+			TRT_PATH = "/usr/local/cuda"
+
+		elif sys.platform == "win32":
+			TRT_PATH = os.environ["CUDA_PATH"]
+
+		else:
+			raise NotImplementedError(sys.platform)
+
+	return TRT_PATH
+
 
 def prepareCompilers():
 	cc = guessToolchain(verbose=2).withOptimizationLevel(level=4, debuglevel=0).cppMode(True)
 	nvcc = guessNVCCToolchain(verbose=2).withOptimizationLevel(level=4, debuglevel=0)
+
+	TRT_PATH = findLibraryPath()
 
 	if sys.platform == "linux":
 		cc.includeDirs.append(pybind11.get_include(user=True))
 
 		cc.addLibrary(
 			"tensorrt",
-			["/usr/local/cuda/include", "/usr/local/include/python%s.%s" % sys.version_info[:2]],
-			["/usr/local/cuda/lib64"],
+			[os.path.join(TRT_PATH, "include"), "/usr/local/include/python%s.%s" % sys.version_info[:2]],
+			[os.path.join(TRT_PATH, "lib64")],
 			["cudart", "nvinfer", "nvinfer_plugin", "nvcaffe_parser", "nvonnxparser"]
 		)
 
 	elif sys.platform == "win32":
-		CUDA_PATH = os.environ["CUDA_PATH"]
-
 		cc.addLibrary(
 			"tensorrt",
-			[os.path.join(CUDA_PATH, "include")],
-			[os.path.join(CUDA_PATH, "lib/x64")],
+			[os.path.join(TRT_PATH, "include")],
+			[os.path.join(TRT_PATH, "lib/x64")],
 			["cudart", "nvinfer", "nvinfer_plugin", "nvparsers", "nvonnxparser"]
 		)
 
@@ -76,7 +94,7 @@ def createRules(cc, nvcc):
 
 
 def main():
-	buildDriver()
+	return buildDriver()
 
 
 if __name__ == "__main__":

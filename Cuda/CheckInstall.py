@@ -1,6 +1,4 @@
-import sys, os, subprocess
-import tempfile
-
+import sys, os, subprocess, tempfile
 from colorama import Fore, Style
 
 
@@ -9,7 +7,7 @@ if "PYCHARM_HOSTED" not in os.environ:
 	colorama.init()
 
 
-testKernel = """
+cudaTestKernel = """
 
 #include <stdio.h>
 
@@ -87,67 +85,59 @@ exit:
 """
 
 
-def main():
-	checkCuda()
-	checkNVCC()
-	checkPipPackages()
-
-	print("%sAll done, exiting ...%s" % (Fore.LIGHTGREEN_EX, Style.RESET_ALL))
-
-
-def checkCuda():
-	print("%sChecking CUDA installation ...%s" % (Fore.LIGHTBLUE_EX, Style.RESET_ALL))
+def checkRuntime(name, compiler, download, envpath):
+	print("%sChecking %s installation ...%s" % (Fore.LIGHTBLUE_EX, name, Style.RESET_ALL))
 
 	try:
-		version = subprocess.getoutput("nvcc --version").split()[-1]
+		version = subprocess.getoutput("%s --version" % compiler).split()[-1]
 
 	except Exception as e:
-		print("%sCUDA library is not found with error:%s\n%s" % (Fore.RED, Style.RESET_ALL, e))
-		print("Download and install appropriate version from https://developer.nvidia.com/cuda-downloads")
+		print("%s%s is not found with error:%s\n%s" % (Fore.RED, name, Style.RESET_ALL, e))
+		print("Download and install appropriate version from %s" % download)
 
 		print("Exiting ...")
 		sys.exit(1)
 
-	print("%sCUDA %s and SDK libraries are found!%s" % (Fore.LIGHTGREEN_EX, version, Style.RESET_ALL))
+	print("%s%s %s and SDK libraries are found!%s" % (Fore.LIGHTGREEN_EX, name, version, Style.RESET_ALL))
 	print("Continuing ...", end="\n\n")
 
 	if sys.platform != "win32":
 		return
 
-	print("%sChecking CUDA environment on Windows platform ...%s" % (Fore.LIGHTBLUE_EX, Style.RESET_ALL))
-	CUDA_PATH = os.environ.get("CUDA_PATH", None)
+	print("%sChecking %s environment on Windows platform ...%s" % (Fore.LIGHTBLUE_EX, name, Style.RESET_ALL))
+	RUNTIME_PATH = os.environ.get(envpath, None)
 
-	if CUDA_PATH is None:
-		print("%sCUDA_PATH is not set - set it to CUDA installation path!%s" % (Fore.RED, Style.RESET_ALL))
+	if RUNTIME_PATH is None:
+		print("%s%s is not set - set it to CUDA installation path!%s" % (Fore.RED, envpath, Style.RESET_ALL))
 
 		print("Exiting ...")
 		sys.exit(1)
 
-	print("%sCUDA_PATH is set!%s" % (Fore.LIGHTGREEN_EX, Style.RESET_ALL))
+	print("%s%s is set!%s" % (Fore.LIGHTGREEN_EX, envpath, Style.RESET_ALL))
 	print("Continuing ...", end="\n\n")
 
 
-def checkNVCC():
-	print("%sChecking NVCC compiler ...%s" % (Fore.LIGHTBLUE_EX, Style.RESET_ALL))
+def checkCompiler(name, compiler, kernel, ext):
+	print("%sChecking %s compiler ...%s" % (Fore.LIGHTBLUE_EX, compiler.upper(), Style.RESET_ALL))
 
-	temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".cu", delete=False)
+	temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=ext, delete=False)
 	exefile = os.path.join(os.path.dirname(temp.name), "a.out")
 
 	try:
 		with temp:
-			temp.write(testKernel)
+			temp.write(kernel)
 
 		try:
-			res = subprocess.check_output(["nvcc", "-o", exefile, temp.name])
-			print("%snvcc compiled test kernel with output:%s %s" % (
-				Fore.LIGHTGREEN_EX, Style.RESET_ALL, res.decode("utf-8")
+			res = subprocess.check_output([compiler, "-o", exefile, temp.name])
+			print("%s%s compiled test kernel with output:%s %s" % (
+				Fore.LIGHTGREEN_EX, compiler, Style.RESET_ALL, res.decode("utf-8")
 			))
 
 			print("Continuing ...", end="\n\n")
 
 		except subprocess.CalledProcessError as e:
-			print("%snvcc failed compiling test kernel with error:%s\n%s" % (
-				Fore.RED, Style.RESET_ALL, e.output.decode("utf-8")
+			print("%s%s failed compiling test kernel with error:%s\n%s" % (
+				Fore.RED, compiler, Style.RESET_ALL, e.output.decode("utf-8")
 			))
 
 			print("Exiting ...")
@@ -156,7 +146,7 @@ def checkNVCC():
 	finally:
 		os.remove(temp.name)
 
-	print("%sChecking compiled CUDA kernel ...%s" % (Fore.LIGHTBLUE_EX, Style.RESET_ALL))
+	print("%sChecking compiled %s kernel ...%s" % (Fore.LIGHTBLUE_EX, name, Style.RESET_ALL))
 
 	try:
 		result = subprocess.check_output(exefile, stderr=subprocess.PIPE).decode("utf-8")
@@ -217,6 +207,18 @@ def checkPipPackages():
 			print("%sFound package '%s' == %s%s" % (Fore.LIGHTGREEN_EX, package, version, Style.RESET_ALL))
 
 		print("Continuing ...", end="\n\n")
+
+
+def main():
+	checkRuntime(
+		name="CUDA", compiler="nvcc", download="https://developer.nvidia.com/cuda-downloads", envpath="CUDA_PATH"
+	)
+	checkCompiler(
+		name="CUDA", compiler="nvcc", kernel=cudaTestKernel, ext=".cu"
+	)
+	checkPipPackages()
+
+	print("%sAll done, exiting ...%s" % (Fore.LIGHTGREEN_EX, Style.RESET_ALL))
 
 
 if __name__ == "__main__":

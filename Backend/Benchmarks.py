@@ -5,10 +5,13 @@ timeKernel = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -16,17 +19,20 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Benchmarks import Utils
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
+
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=0)
 
 	global timeKernel
-	timeKernel = Utils.timeKernel
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Benchmarks import Utils
-
-	global timeKernel
-	timeKernel = Utils.timeKernel
+	timeKernel = backend.timeKernel
 
 
 def initCPU():

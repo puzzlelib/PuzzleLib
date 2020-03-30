@@ -152,7 +152,7 @@ static void Cuda_Buffer_dealloc(PyObject *self)
 	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
 	Cuda_Buffer_free(pybuf);
 
-	PyObject_FREE(self);
+	PyObject_Del(self);
 }
 
 

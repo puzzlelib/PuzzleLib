@@ -26,7 +26,7 @@ class Linear(Module):
 			return
 
 		Wshape, bshape = ((outsize, insize), (insize, )) if transpose else ((insize, outsize), (outsize, ))
-		W = self.createTensorWithScheme(initscheme, Wshape, wscale, self.calcNeuronsNumber(Wshape, transpose))
+		W = self.createTensorWithScheme(initscheme, Wshape, wscale, factorShape=Wshape)
 
 		self.setVar("W", Variable(gpuarray.empty(Wshape, dtype=self.calctype) if W is None else gpuarray.to_gpu(W)))
 
@@ -88,7 +88,7 @@ class Linear(Module):
 
 
 	def calcMode(self, T):
-		if Config.backend == Config.Backend.cuda:
+		if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
 			if self.calctype == T:
 				return
 

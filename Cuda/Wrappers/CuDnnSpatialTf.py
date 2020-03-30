@@ -1,26 +1,29 @@
 import itertools, math
-
 import numpy as np
-
-from PuzzleLib.Cuda.Wrappers.CuDnn import context
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.Utils import dtypesSupported
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
-		spatialTfTest(dtype, atol)
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def spatialTfTest(dtype, atol):
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		bnd = Backend.getBackend(deviceIdx, initmode=2)
+
+		for dtype, atol in bnd.dtypesSupported():
+			spatialTfTest(bnd, dtype, atol)
+
+
+def spatialTfTest(bnd, dtype, atol):
 	batchsize, maps, inh, inw = 1, 1, 4, 4
 	outh, outw = int(1.0 * inh), int(1.0 * inw)
 
 	hostData = np.random.randn(batchsize, maps, inh, inw).astype(dtype)
 	hostTf = np.tile(np.array([[1.0, 0.1, -0.001], [0.0, 0.9, -0.001]], dtype=dtype), reps=(batchsize, 1, 1))
 
-	data, transform = GPUArray.toGpu(hostData), GPUArray.toGpu(hostTf)
-	outdata, grid = context.spatialTf(data, transform, outshape=(batchsize, maps, outh, outw), getGrid=True)
+	data, transform = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostTf)
+	outdata, grid = bnd.dnn.spatialTf(data, transform, outshape=(batchsize, maps, outh, outw), getGrid=True)
 
 	hostGrid = np.empty((batchsize, outh, outw, 2), dtype=dtype)
 	xstep, ystep = 2.0 / (outw - 1), 2.0 / (outh - 1)
@@ -52,8 +55,8 @@ def spatialTfTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad, dtransform, dgrid = context.spatialTfBackward(grad, data, grid, getDGrid=True)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad, dtransform, dgrid = bnd.dnn.spatialTfBackward(grad, data, grid, getDGrid=True)
 
 	hostInGrad = np.zeros(data.shape, dtype=dtype)
 

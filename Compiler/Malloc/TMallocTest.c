@@ -1,7 +1,7 @@
 #define Py_LIMITED_API
 #include <Python.h>
 
-#include "../TestData/TraceMalloc.gen.h"
+#include "TraceMalloc.gen.h"
 
 
 static PyObject *PyTraceMalloc_malloc(PyObject *self, PyObject *args)

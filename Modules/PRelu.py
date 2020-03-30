@@ -43,8 +43,9 @@ class PRelu(Module):
 			raise ModuleError("%s: using inplace flag while calculating gradient is prohibited" % self)
 
 		slopegrad = preluBackwardParams(self.inData, grad, self.sharedMaps)
-		Blas.addVectorToVector(slopegrad, self.vars["slopes"].grad, out=self.vars["slopes"].grad,
-							   alpha=scale, beta=momentum)
+		Blas.addVectorToVector(
+			slopegrad, self.vars["slopes"].grad, out=self.vars["slopes"].grad, alpha=scale, beta=momentum
+		)
 
 
 	def dataShapeFrom(self, shape):
@@ -69,19 +70,23 @@ class PRelu(Module):
 
 
 def unittest():
+	preluTest()
+
+
+def preluTest():
 	batchsize, maps, h, w = 5, 4, 6, 6
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, maps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	preluMod = PRelu(maps)
 	preluMod(data)
 
-	hostData, hostSlopes = data.get(), preluMod.slopes.get()
+	hostSlopes = preluMod.slopes.get()
 	hostOutData = np.empty(preluMod.data.shape, dtype=np.float32)
 
 	for c in range(maps):
-		hostOutData[:, c] = (hostData[:, c] > 0.0) * hostData[:, c] + \
-							(hostData[:, c] <= 0.0) * hostSlopes[c] * hostData[:, c]
+		hostOutData[:, c] = ((hostData[:, c] > 0.0) + (hostData[:, c] <= 0.0) * hostSlopes[c]) * hostData[:, c]
 
 	assert np.allclose(hostOutData, preluMod.data.get())
 

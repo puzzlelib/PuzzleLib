@@ -12,10 +12,13 @@ maximum = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -23,33 +26,27 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.GPUArray import GPUArray as CudaArray
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
+
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=0)
 
 	global GPUArray, to_gpu, empty, zeros
-	GPUArray = CudaArray
-	to_gpu = CudaArray.toGpu
-	empty = CudaArray.empty
-	zeros = CudaArray.zeros
+	GPUArray = backend.GPUArray
+	to_gpu = backend.GPUArray.toGpu
+	empty = backend.GPUArray.empty
+	zeros = backend.GPUArray.zeros
 
 	global minimum, maximum
-	minimum = CudaArray.min
-	maximum = CudaArray.max
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Driver import Driver
-	from PuzzleLib.OpenCL.Kernels import Templates
-	from PuzzleLib.OpenCL.Utils import context, queue
-
-	global GPUArray, to_gpu, empty, zeros
-	GPUArray = Driver.Array
-	to_gpu = lambda *args, **kwargs: Driver.to_device(queue, *args, **kwargs)
-	empty = lambda *args, **kwargs: Driver.empty(queue, *args, **kwargs)
-	zeros = lambda *args, **kwargs: Driver.zeros(queue, *args, **kwargs)
-
-	global minimum, maximum
-	minimum = lambda ary: Templates.minimum(context, queue, ary)
-	maximum = lambda ary: Templates.maximum(context, queue, ary)
+	minimum = backend.GPUArray.min
+	maximum = backend.GPUArray.max
 
 
 def initCPU():

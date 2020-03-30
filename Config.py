@@ -1,3 +1,4 @@
+import multiprocessing
 from enum import Enum
 
 
@@ -7,7 +8,7 @@ class ConfigError(Exception):
 
 class Backend(Enum):
 	cuda = 0
-	opencl = 1
+	hip = 1
 	cpu = 2
 	intel = 3
 
@@ -33,3 +34,7 @@ showWarnings = True
 
 def isCPUBased(bnd):
 	return bnd in {Backend.cpu, Backend.intel}
+
+
+def shouldInit():
+	return multiprocessing.current_process().name == "MainProcess" or allowMultiContext

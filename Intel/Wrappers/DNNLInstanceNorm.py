@@ -11,8 +11,7 @@ def instanceNorm2d(data, scale, bias, epsilon=1e-5):
 		extbias = CPUArray.toDevice(np.tile(bias.data, (batchsize, 1, 1)))
 
 	else:
-		extscale = scale
-		extbias = bias
+		extscale, extbias = scale, bias
 
 	indata = data.reshape(1, batchsize * data.shape[1], data.shape[2], data.shape[3])
 	mean = CPUArray.empty((1, indata.shape[1], 1, 1), dtype=np.float32)

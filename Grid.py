@@ -64,7 +64,7 @@ class NodeInfo:
 
 
 	def recvBuffer(self, name, queue, buffer=None):
-		from PuzzleLib.Cuda import Driver
+		from PuzzleLib.Backend.Utils import backend
 
 		parentname, bufipc, bufsize, args = queue.get()
 		assert name == parentname
@@ -72,14 +72,14 @@ class NodeInfo:
 		cache = self.inTensors.get(name, None)
 
 		if cache is None:
-			cache = (Driver.allocateFromIPCHandle(bufipc, bufsize), None)
+			cache = (backend.Driver.allocateFromIPCHandle(bufipc, bufsize), None)
 			self.inTensors[name] = cache
 
 		mapped, _ = cache
 
 		if buffer is not None:
 			mapped.copy(dst=buffer)
-			Driver.Device.synchronize()
+			backend.Driver.Device.synchronize()
 
 			mapped = buffer
 
@@ -87,7 +87,7 @@ class NodeInfo:
 
 
 	def sendBuffer(self, name, buffer, queue, *args):
-		from PuzzleLib.Cuda import Driver
+		from PuzzleLib.Backend.Utils import backend
 
 		if name not in self.outTensors:
 			self.outTensors[name] = buffer
@@ -96,7 +96,7 @@ class NodeInfo:
 			assert self.outTensors[name] is buffer
 			bufipc = None
 
-		Driver.Device.synchronize()
+		backend.Driver.Device.synchronize()
 		queue.put((name, bufipc, buffer.size, args))
 
 
@@ -122,7 +122,7 @@ class ParentNode(NodeInfo):
 
 	def sumTensor(self, name, tensor):
 		from PuzzleLib.Backend.Blas import addVectorToVector
-		from PuzzleLib.Cuda.GPUArray import GPUArray
+		from PuzzleLib.Backend.gpuarray import GPUArray
 
 		beta = 1.0 / self.gridsize
 

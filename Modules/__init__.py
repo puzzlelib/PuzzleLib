@@ -21,6 +21,7 @@ from PuzzleLib.Modules.Dropout import Dropout
 from PuzzleLib.Modules.Dropout2D import Dropout2D
 from PuzzleLib.Modules.Embedder import Embedder
 from PuzzleLib.Modules.Flatten import Flatten
+from PuzzleLib.Modules.Gelu import Gelu
 from PuzzleLib.Modules.Glue import Glue
 from PuzzleLib.Modules.GroupLinear import GroupLinear, GroupMode
 from PuzzleLib.Modules.Identity import Identity

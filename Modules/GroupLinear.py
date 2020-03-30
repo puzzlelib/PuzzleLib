@@ -62,7 +62,7 @@ class GroupLinear(Module):
 
 		Wshape = (groups, asize, bsize)
 
-		W = self.createTensorWithScheme(initscheme, Wshape, wscale, self.calcNeuronsNumber(Wshape, self.transpW))
+		W = self.createTensorWithScheme(initscheme, Wshape, wscale, factorShape=(asize, bsize))
 		W = gpuarray.empty(Wshape, dtype=np.float32) if W is None else gpuarray.to_gpu(W)
 
 		self.setVar("W", Variable(W))
@@ -194,12 +194,6 @@ class GroupLinear(Module):
 
 			elif shape[2] != self.W.shape[2]:
 				raise ModuleError("Expected %d grad dimensions, %d were given" % (self.W.shape[2], shape[2]))
-
-
-	@classmethod
-	def calcNeuronsNumber(cls, shape, transpose=False):
-		shape = shape[1:]
-		return super().calcNeuronsNumber(shape, transpose)
 
 
 def unittest():

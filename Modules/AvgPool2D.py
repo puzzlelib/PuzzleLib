@@ -1,7 +1,5 @@
 import numpy as np
 
-from PuzzleLib import Config
-
 from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Backend.Dnn.Basic import PoolMode, poolNd, poolNdBackward
 
@@ -13,14 +11,7 @@ class AvgPool2D(Pool2D):
 		super().__init__(size, stride, pad, name)
 		self.registerBlueprint(locals())
 
-		if Config.backend == Config.Backend.opencl:
-			assert includePad == True
-			self.mode = PoolMode.avg
-
-		elif includePad:
-			self.mode = PoolMode.avgWithPad
-		else:
-			self.mode = PoolMode.avgNoPad
+		self.mode = PoolMode.avgWithPad if includePad else PoolMode.avgNoPad
 
 
 	def updateData(self, data):

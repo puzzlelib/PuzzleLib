@@ -3,7 +3,7 @@ import sys, os
 import numpy as np
 
 from PuzzleLib.Compiler.Toolchain import guessToolchain
-from PuzzleLib.Compiler.Containers.Generate import generateVector
+from PuzzleLib.Compiler.Containers.Vector.Generate import generateVector
 from PuzzleLib.Compiler.Malloc.Generate import generateMalloc
 
 
@@ -13,8 +13,10 @@ def buildDriver(debugmode, verbose):
 
 	generateTemplates(path=".")
 
-	cc.build("../Driver" + ("_d" if debugmode >= 3 else "") + cc.pydext, collectSources(path="."))
-	return cc.clearPath("..")
+	driver = "../Driver" + ("_d" if debugmode >= 3 else "") + cc.pydext
+	cc.build(driver, collectSources(path=".")).clearPath("..")
+
+	return driver
 
 
 def prepareCompiler(debugmode, verbose):
@@ -26,10 +28,7 @@ def prepareCompiler(debugmode, verbose):
 		cc.addDefine("ENABLE_TRACE_MALLOC")
 
 		if debugmode >= 2:
-			cc.addDefine("TRACE_CUDA_DRIVER")
-			cc.addDefine("TRACE_CUDA_CURAND")
-			cc.addDefine("TRACE_CUDA_CUBLAS")
-			cc.addDefine("TRACE_CUDA_CUDNN")
+			cc.addDefine("TRACE_CUDA_DRIVER", "TRACE_CUDA_CURAND", "TRACE_CUDA_CUBLAS", "TRACE_CUDA_CUDNN")
 
 			if debugmode >= 3:
 				cc.libraries[0] += "_d"
@@ -121,7 +120,7 @@ def collectDnnSources(path):
 
 
 def main():
-	buildDriver(debugmode=0, verbose=2)
+	return buildDriver(debugmode=0, verbose=2)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../Core/Driver.h"
-#define TO_STRING(s) #s
 
 
 // CuRand

@@ -8,10 +8,13 @@ maxunpool2dBackward = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -19,23 +22,38 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Kernels import Pool
-
-	global maxpool2d, maxpool2dBackward, maxunpool2d, maxunpool2dBackward
-	maxpool2d = Pool.maxpool2d
-	maxpool2dBackward = Pool.maxpool2dBackward
-	maxunpool2d = Pool.maxunpool2d
-	maxunpool2dBackward = Pool.maxunpool2dBackward
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
 
 
-def initOpenCL():
-	from PuzzleLib.OpenCL.Kernels import Pool
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
 
-	global maxpool2d, maxpool2dBackward, maxunpool2d, maxunpool2dBackward
-	maxpool2d = Pool.maxpool2d
-	maxpool2dBackward = Pool.maxpool2dBackward
-	maxunpool2d = Pool.maxunpool2d
-	maxunpool2dBackward = Pool.maxunpool2dBackward
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	memoryPool, poolmod = backend.memoryPool, backend.poolmod
+
+	def wrapMaxPool2d(data, size, stride, pad):
+		return poolmod.maxpool2d(data, size, stride, pad, memoryPool)
+
+	def wrapMaxPool2dBackward(grad, origshape, mask, size, stride, pad):
+		return poolmod.maxpool2dBackward(grad, origshape, mask, size, stride, pad, memoryPool)
+
+	global maxpool2d, maxpool2dBackward
+	maxpool2d = wrapMaxPool2d
+	maxpool2dBackward = wrapMaxPool2dBackward
+
+	def wrapMaxUnpool2d(data, origshape, mask):
+		return poolmod.maxunpool2d(data, origshape, mask, memoryPool)
+
+	def wrapMaxUnpool2dBackward(grad, poolshape, mask):
+		return poolmod.maxunpool2dBackward(grad, poolshape, mask, memoryPool)
+
+	global maxunpool2d, maxunpool2dBackward
+	maxunpool2d = wrapMaxUnpool2d
+	maxunpool2dBackward = wrapMaxUnpool2dBackward
 
 
 def initCPU():

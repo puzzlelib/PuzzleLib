@@ -40,7 +40,7 @@ class ConvND(Module):
 			return
 
 		Wshape = (outmaps, inmaps, *self.repeat(size, nd))
-		W = self.createTensorWithScheme(initscheme, Wshape, wscale, self.calcNeuronsNumber(Wshape))
+		W = self.createTensorWithScheme(initscheme, Wshape, wscale)
 
 		self.setVar("W", Variable(gpuarray.empty(Wshape, dtype=self.calctype) if W is None else gpuarray.to_gpu(W)))
 
@@ -67,7 +67,7 @@ class ConvND(Module):
 			self.bwdFilterAlgo = ConvBwdFilterAlgo.algo0
 			self.bwdDataAlgo = ConvBwdDataAlgo.algo0
 
-		elif Config.backend == Config.Backend.intel:
+		elif Config.backend in {Config.Backend.hip, Config.Backend.intel}:
 			self.fwdAlgo = ConvFwdAlgo.auto
 			self.bwdFilterAlgo = ConvBwdFilterAlgo.auto
 			self.bwdDataAlgo = ConvBwdDataAlgo.auto
@@ -104,7 +104,7 @@ class ConvND(Module):
 
 
 	def calcMode(self, T):
-		if Config.backend == Config.Backend.cuda:
+		if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
 			if self.calctype == T:
 				return
 

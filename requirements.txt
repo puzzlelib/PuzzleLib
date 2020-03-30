@@ -3,3 +3,4 @@ h5py
 Pillow
 graphviz
 colorama
+pybind11

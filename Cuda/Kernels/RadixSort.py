@@ -1,10 +1,5 @@
 from string import Template
-
 import numpy as np
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import device, warpSize, memoryPool as memPool
 
 
 scanSumTmpl = Template("""
@@ -29,7 +24,7 @@ __forceinline__ __device__ unsigned warpScanSum(unsigned value)
 
 	for (int i = 1; i <= $warpSize; i *= 2)
 	{
-		unsigned downval = __shfl_up_sync((unsigned)((1ULL << $warpSize) - 1), value, i, $warpSize);
+		unsigned downval = __shfl_up_sync((unsigned)-1, value, i, $warpSize);
 		if (laneId >= i) value += downval;
 	}
 
@@ -355,69 +350,87 @@ __global__ void segmentSeq(int *segments, int *indices, const int *data, int len
 """)
 
 
-NT, VT = 4 * warpSize, 2
-NV = NT * VT
+class RadixSortModule:
+	def __init__(self, backend):
+		self.GPUArray = backend.GPUArray
+
+		self.NT, self.VT = 128, 2
+		self.NV = self.NT * self.VT
+
+		scanSum = scanSumTmpl.substitute(warpSize=backend.warpSize, NT=self.NT)
+		self.scanMod = backend.SourceModule(scanSumTestTmpl.substitute(scanSum=scanSum))
+
+		radixSort = radixSortTmpl.substitute(
+			scanSum=scanSum, warpSize=backend.warpSize, NT=self.NT, VT=self.VT, NV=self.NV
+		)
+		self.radixMod = backend.SourceModule(radixSortTestTmpl.substitute(
+			radixSort=radixSort, NT=self.NT, VT=self.VT, NV=self.NV
+		))
+
+		segmentSeq = segmentSeqTmpl.substitute(radixSort=radixSort, NT=self.NT, VT=self.VT, NV=self.NV)
+		self.segmentMod = backend.SourceModule(segmentTestTmpl.substitute(
+			segmentSeq=segmentSeq, NT=self.NT, VT=self.VT, NV=self.NV
+		))
 
 
-if device is not None:
-	scanSum = scanSumTmpl.substitute(warpSize=warpSize, NT=NT)
-	scanMod = SourceModule(scanSumTestTmpl.substitute(scanSum=scanSum))
+	def scanSum(self, data):
+		assert data.dtype == np.uint32
 
-	radixSort = radixSortTmpl.substitute(scanSum=scanSum, warpSize=warpSize, NT=NT, VT=VT, NV=NV)
-	radixMod = SourceModule(radixSortTestTmpl.substitute(radixSort=radixSort, NT=NT, VT=VT, NV=NV))
+		length, = data.shape
+		assert length <= self.NT
 
-	segmentSeq = segmentSeqTmpl.substitute(radixSort=radixSort, NT=NT, VT=VT, NV=NV)
-	segmentMod = SourceModule(segmentTestTmpl.substitute(segmentSeq=segmentSeq, NT=NT, VT=VT, NV=NV))
+		outdata = self.GPUArray.empty(data.shape, dtype=data.dtype)
 
-
-def scanSum(data):
-	assert data.dtype == np.uint32
-
-	length, = data.shape
-	assert length <= NT
-
-	outdata = GPUArray.empty(data.shape, dtype=data.dtype, allocator=memPool)
-
-	scanMod.scanSum(outdata, data, np.int32(length), block=(NT, 1, 1), grid=(1, 1, 1))
-	return outdata
+		self.scanMod.scanSum(outdata, data, np.int32(length), block=(self.NT, 1, 1), grid=(1, 1, 1))
+		return outdata
 
 
-def radixSort(keys, values):
-	assert keys.dtype == np.int32 and values.dtype == np.int32
-	assert keys.shape == values.shape
+	def radixSort(self, keys, values):
+		assert keys.dtype == np.int32 and values.dtype == np.int32
+		assert keys.shape == values.shape
 
-	length, = keys.shape
-	assert length <= NV
+		length, = keys.shape
+		assert length <= self.NV
 
-	outkeys = GPUArray.empty(keys.shape, dtype=keys.dtype, allocator=memPool)
-	outvalues = GPUArray.empty(values.shape, dtype=values.dtype, allocator=memPool)
+		outkeys = self.GPUArray.empty(keys.shape, dtype=keys.dtype)
+		outvalues = self.GPUArray.empty(values.shape, dtype=values.dtype)
 
-	radixMod.radixSort(outkeys, outvalues, keys, values, np.int32(length), block=(NT, 1, 1), grid=(1, 1, 1))
-	return outkeys, outvalues
+		self.radixMod.radixSort(
+			outkeys, outvalues, keys, values, np.int32(length), block=(self.NT, 1, 1), grid=(1, 1, 1)
+		)
+		return outkeys, outvalues
 
 
-def segmentSeq(data):
-	assert data.dtype == np.int32
+	def segmentSeq(self, data):
+		assert data.dtype == np.int32
 
-	length, = data.shape
-	assert length <= NV
+		length, = data.shape
+		assert length <= self.NV
 
-	segments = GPUArray.empty((length, 3), dtype=np.int32, allocator=memPool)
-	indices = GPUArray.empty(data.shape, dtype=np.int32, allocator=memPool)
+		segments = self.GPUArray.empty((length, 3), dtype=np.int32)
+		indices = self.GPUArray.empty(data.shape, dtype=np.int32)
 
-	segmentMod.segmentSeq(segments, indices, data, np.int32(length), block=(NT, 1, 1), grid=(1, 1, 1))
-	return segments, indices
+		self.segmentMod.segmentSeq(segments, indices, data, np.int32(length), block=(self.NT, 1, 1), grid=(1, 1, 1))
+		return segments, indices
 
 
 def unittest():
-	scanSumTest()
-	radixSortTest()
-	segmentTest()
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def scanSumTest():
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = RadixSortModule(Backend.getBackend(deviceIdx))
+
+		scanSumTest(module)
+		radixSortTest(module)
+		segmentTest(module)
+
+
+def scanSumTest(module):
 	hostData = np.random.randint(0, 1000, size=(120, ), dtype=np.uint32)
-	outdata = scanSum(GPUArray.toGpu(hostData))
+	outdata = module.scanSum(module.GPUArray.toGpu(hostData))
 
 	hostOutData = np.empty_like(hostData)
 
@@ -427,19 +440,19 @@ def scanSumTest():
 	assert np.allclose(outdata.get(), hostOutData)
 
 
-def radixSortTest():
+def radixSortTest(module):
 	hostKeys = np.random.randint(0, (1 << 31) - 1, size=(250, ), dtype=np.int32)
 	hostValues = np.arange(0, hostKeys.shape[0], dtype=np.int32)
 
-	outkeys, outvalues = radixSort(GPUArray.toGpu(hostKeys), GPUArray.toGpu(hostValues))
+	outkeys, outvalues = module.radixSort(module.GPUArray.toGpu(hostKeys), module.GPUArray.toGpu(hostValues))
 
 	assert (outkeys.get() == np.sort(hostKeys)).all()
 	assert (outvalues.get() == np.argsort(hostKeys)).all()
 
 
-def segmentTest():
+def segmentTest(module):
 	hostData = np.random.randint(10, 30, size=(250, ), dtype=np.int32)
-	segments, indices = segmentSeq(GPUArray.toGpu(hostData))
+	segments, indices = module.segmentSeq(module.GPUArray.toGpu(hostData))
 
 	hostSortedData = np.sort(hostData)
 	hostSegments = np.empty(shape=segments.shape, dtype=segments.dtype)

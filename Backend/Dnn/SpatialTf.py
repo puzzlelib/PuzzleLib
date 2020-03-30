@@ -6,10 +6,13 @@ spatialTfBackward = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -17,21 +20,23 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Wrappers.CuDnn import context
-	from PuzzleLib.Cuda.Utils import memoryPool
+	from PuzzleLib.Cuda.Backend import getBackend
+
+	backend = getBackend(Config.deviceIdx, initmode=1)
+	memoryPool, dnn = backend.memoryPool, backend.dnn
 
 	def wrapSpatialTf(data, transform, outshape, getGrid):
-		return context.spatialTf(data, transform, outshape, getGrid, allocator=memoryPool)
+		return dnn.spatialTf(data, transform, outshape, getGrid, allocator=memoryPool)
 
 	def wrapSpatialTfBackward(grad, data, grid):
-		return context.spatialTfBackward(grad, data, grid, allocator=memoryPool)
+		return dnn.spatialTfBackward(grad, data, grid, allocator=memoryPool)
 
 	global spatialTf, spatialTfBackward
 	spatialTf = wrapSpatialTf
 	spatialTfBackward = wrapSpatialTfBackward
 
 
-def initOpenCL():
+def initHip():
 	pass
 
 

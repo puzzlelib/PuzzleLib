@@ -50,7 +50,7 @@ static void Cuda_Function_dealloc(PyObject *self)
 	if (pyfunc->module != NULL)
 		Py_DECREF(pyfunc->module);
 
-	PyObject_FREE(self);
+	PyObject_Del(self);
 }
 
 

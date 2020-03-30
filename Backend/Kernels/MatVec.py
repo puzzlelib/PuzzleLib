@@ -6,10 +6,13 @@ argmax = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -17,19 +20,28 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Kernels import MatVec
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
+
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	memoryPool, matmod = backend.memoryPool, backend.matmod
+
+	def wrapAddVecToMat(vec, mat, axis, out):
+		return matmod.addVecToMat(vec, mat, axis, out, memoryPool)
+
+	def wrapArgmax(tensor, axis):
+		return matmod.argmax(tensor, axis, memoryPool)
 
 	global addVecToMat, argmax
-	addVecToMat = MatVec.addVecToMat
-	argmax = MatVec.argmax
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Kernels import MatVec
-
-	global addVecToMat, argmax
-	addVecToMat = MatVec.addVecToMat
-	argmax = MatVec.argmax
+	addVecToMat = wrapAddVecToMat
+	argmax = wrapArgmax
 
 
 def initCPU():

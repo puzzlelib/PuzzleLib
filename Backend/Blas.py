@@ -11,10 +11,13 @@ sumOnMatrix = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.backend == Config.Backend.cpu:
 		initCPU()
 	elif Config.backend == Config.Backend.intel:
@@ -24,56 +27,48 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.GPUArray import GPUArray
-	from PuzzleLib.Cuda.Utils import memoryPool
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
 
-	from PuzzleLib.Cuda.Wrappers.CuBlas import context
-	from PuzzleLib.Cuda.Kernels.MatVec import matsum
-	from PuzzleLib.Cuda.Kernels.ElementWise import toVectorAddVectorKer, addKer
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	GPUArray, memoryPool, blas, matmod = backend.GPUArray, backend.memoryPool, backend.blas, backend.matmod
 
 	def wrapToVectorAddVector(y, x, alpha=1.0):
-		toVectorAddVectorKer(y.dtype)(y, x, alpha)
+		backend.toVectorAddVectorKer(y.dtype)(y, x, alpha)
 		return y
 
-	def wrapAddVectorToVector(x, y, out=None, alpha=1.0, beta=1.0, allocator=memoryPool):
+	def wrapAddVectorToVector(x, y, out=None, alpha=1.0, beta=1.0):
 		if out is None:
-			out = GPUArray.empty(x.shape, dtype=x.dtype, allocator=allocator)
+			out = GPUArray.empty(x.shape, dtype=x.dtype, allocator=memoryPool)
 		else:
 			assert out.shape == x.shape
 
-		addKer(out.dtype)(out, x, alpha, y, beta)
+		backend.addKer(out.dtype)(out, x, alpha, y, beta)
 		return out
 
-	def wrapGemm(A, B, out=None, transpA=False, transpB=False, alpha=1.0, beta=0.0, allocator=memoryPool):
-		return context.gemm(A, B, out, transpA, transpB, alpha, beta, allocator)
+	def wrapGemm(A, B, out=None, transpA=False, transpB=False, alpha=1.0, beta=0.0):
+		return blas.gemm(A, B, out, transpA, transpB, alpha, beta, memoryPool)
 
-	def wrapSumOnMatrix(A, out=None, cols=True, alpha=1.0, beta=0.0, allocator=memoryPool):
+	def wrapSumOnMatrix(A, out=None, cols=True, alpha=1.0, beta=0.0):
 		assert A.ndim == 2
-		return matsum(A, 0 if cols else 1, out, alpha, beta, allocator)
+		return matmod.matsum(A, 0 if cols else 1, out, alpha, beta, memoryPool)
 
 	global toVectorAddVector, addVectorToVector, dot, vectorL1Norm
 	toVectorAddVector = wrapToVectorAddVector
 	addVectorToVector = wrapAddVectorToVector
-	dot = context.dot
-	vectorL1Norm = context.l1norm
+	dot = blas.dot
+	vectorL1Norm = blas.l1norm
 
 	global mulMatrixOnMatrix, sumOnMatrix
 	mulMatrixOnMatrix = wrapGemm
 	sumOnMatrix = wrapSumOnMatrix
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Wrappers import CLBlas
-
-	global toVectorAddVector, addVectorToVector, dot, vectorL1Norm
-	toVectorAddVector = CLBlas.toVectorAddVector
-	addVectorToVector = CLBlas.addVectorToVector
-	dot = CLBlas.dot
-	vectorL1Norm = CLBlas.vectorL1Norm
-
-	global mulMatrixOnMatrix, sumOnMatrix
-	mulMatrixOnMatrix = CLBlas.mulMatrixOnMatrix
-	sumOnMatrix = CLBlas.sumOnMatrix
 
 
 def initCPU():

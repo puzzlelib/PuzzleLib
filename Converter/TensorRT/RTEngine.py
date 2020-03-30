@@ -22,8 +22,8 @@ class RTEngineType(Enum):
 
 
 def genEngineName(name, dtype, inshape, outshape):
-	from PuzzleLib.Cuda.Utils import device
-	arch = device.name().replace(" ", "_")
+	from PuzzleLib.Backend.Utils import backend
+	arch = backend.device.name().replace(" ", "_")
 
 	dtypes = {
 		DataType.float32: "float32",

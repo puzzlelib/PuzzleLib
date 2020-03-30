@@ -2,18 +2,14 @@ import math, random
 from string import Template
 
 import numpy as np
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import device, warpSize, memoryPool as memPool
-
-from PuzzleLib.Cuda.Wrappers.CuDnn import context as cudnn
 from PuzzleLib.Cuda.Kernels.RadixSort import scanSumTmpl, radixSortTmpl, segmentSeqTmpl
 
 
 ctcTmpl = Template("""
 
-#include <math_constants.h>
+#ifdef __CUDACC__
+	#define HUGE_VALF (1.0f / 0.0f)
+#endif
 
 
 $segmentSeq
@@ -21,10 +17,10 @@ $segmentSeq
 
 __forceinline__ __device__ float logPlus(float p1, float p2)
 {
-	if (p1 <= -CUDART_INF_F)
+	if (p1 <= -HUGE_VALF)
 		return p2;
 
-	if (p2 <= -CUDART_INF_F)
+	if (p2 <= -HUGE_VALF)
 		return p1;
 
 	return log1pf(expf(-fabsf(p1 - p2))) + max(p1, p2);
@@ -51,7 +47,7 @@ void calcAlphas(const float * __restrict__ indata, const int * __restrict__ data
 		int label = (i % 2 == 0) ? blank : labels[i / 2];
 
 		shlabels[i] = label;
-		alphas[i] = (i < 2) ? logf(indata[label]) : -CUDART_INF_F;
+		alphas[i] = (i < 2) ? logf(indata[label]) : -HUGE_VALF;
 	}
 
 	__syncthreads();
@@ -112,7 +108,7 @@ void calcBetas(const float * __restrict__ indata, const int * __restrict__ datal
 
 	float loglike = nll[blockIdx.x];
 
-	if (loglike >= CUDART_INF_F)
+	if (loglike >= HUGE_VALF)
 		return;
 
 	int keys[$VT];
@@ -156,7 +152,7 @@ void calcBetas(const float * __restrict__ indata, const int * __restrict__ datal
 			for (int i = threadIdx.x; i < S; i += $NT)
 			{
 				int offset = (T - 1) * gridDim.x * vocabsize + shlabels[i];
-				cache.betas[0][i] = (i >= S - 2) ? logf(indata[offset]) : -CUDART_INF_F;
+				cache.betas[0][i] = (i >= S - 2) ? logf(indata[offset]) : -HUGE_VALF;
 			}
 		}
 
@@ -168,7 +164,7 @@ void calcBetas(const float * __restrict__ indata, const int * __restrict__ datal
 			if (i >= segments.length)
 				break;
 
-			gr[i] = -CUDART_INF_F;
+			gr[i] = -HUGE_VALF;
 
 			for (int j = segments.start[i]; j < segments.end[i]; j++)
 				gr[i] = logPlus(gr[i], alphas[t * S + indices[j]] + cache.betas[src][indices[j]]);
@@ -196,84 +192,105 @@ void calcBetas(const float * __restrict__ indata, const int * __restrict__ datal
 """)
 
 
-def generateModule(NT, VT):
-	NV = NT * VT
+class CTCModule:
+	def __init__(self, backend):
+		self.GPUArray, self.dnn = backend.GPUArray, backend.dnn
 
-	scanSum = scanSumTmpl.substitute(warpSize=warpSize, NT=NT)
-	radixSort = radixSortTmpl.substitute(scanSum=scanSum, warpSize=warpSize, NT=NT, VT=VT, NV=NV)
-	segmentSeq = segmentSeqTmpl.substitute(radixSort=radixSort, NT=NT, VT=VT, NV=NV)
-
-	return SourceModule(ctcTmpl.substitute(segmentSeq=segmentSeq, NT=NT, VT=VT, NV=NV))
+		self.configs = self.generateConfig(backend)
+		self.modules = [self.generateModule(backend, NT, VT) for NT, VT in self.configs]
 
 
-configs = [
-	(32, 1),
-	(64, 1),
-	(128, 1),
-	(64, 3),
-	(128, 2),
-	(32, 9),
-	(64, 6),
-	(128, 4),
-	(64, 9),
-	(128, 6),
-	(128, 9),
-	(128, 10)
-]
+	@staticmethod
+	def generateConfig(backend):
+		return [
+			(backend.warpSize, 1),
+			(backend.warpSize * 2, 1),
+			(backend.warpSize * 4, 1),
+			(backend.warpSize * 2, 3),
+			(backend.warpSize * 4, 2),
+			(backend.warpSize, 9),
+			(backend.warpSize * 2, 6),
+			(backend.warpSize * 4, 4),
+			(backend.warpSize * 2, 9),
+			(backend.warpSize * 4, 6),
+			(backend.warpSize * 4, 9),
+			(backend.warpSize * 4, 10)
+		]
 
 
-if device is not None:
-	modules = [generateModule(NT, VT) for NT, VT in configs]
+	@staticmethod
+	def generateModule(backend, NT, VT):
+		NV = NT * VT
+
+		scanSum = scanSumTmpl.substitute(warpSize=backend.warpSize, NT=NT)
+		radixSort = radixSortTmpl.substitute(scanSum=scanSum, warpSize=backend.warpSize, NT=NT, VT=VT, NV=NV)
+		segmentSeq = segmentSeqTmpl.substitute(radixSort=radixSort, NT=NT, VT=VT, NV=NV)
+
+		return backend.SourceModule(ctcTmpl.substitute(segmentSeq=segmentSeq, NT=NT, VT=VT, NV=NV))
 
 
-def ctcLoss(data, datalen, labels, lengths, blank, error=None, normalized=False, returnAlphas=False):
-	T, batchsize, vocabsize = data.shape
-	mx = 2 * np.max(lengths) + 1
+	def ctcLoss(self, data, datalen, labels, lengths, blank, error=None, normalized=False, returnAlphas=False,
+				allocator=None):
+		T, batchsize, vocabsize = data.shape
+		mx = 2 * np.max(lengths) + 1
 
-	config = min(i for i, (NT, VT) in enumerate(configs) if mx <= NT * VT)
-	mod, NT = modules[config], configs[config][0]
+		config = min(i for i, (NT, VT) in enumerate(self.configs) if mx <= NT * VT)
+		mod, NT = self.modules[config], self.configs[config][0]
 
-	if not normalized:
-		data = cudnn.softmaxNd(data.reshape(T * batchsize, vocabsize, 1, 1), allocator=memPool).reshape(
-			T, batchsize, vocabsize
+		if not normalized:
+			data = self.dnn.softmaxNd(data.reshape(T * batchsize, vocabsize, 1, 1), allocator=allocator).reshape(
+				T, batchsize, vocabsize
+			)
+
+		offsets = np.cumsum(lengths, dtype=np.int32)
+		extOffsets = np.empty(shape=(batchsize + 1, ), dtype=np.int32)
+
+		extOffsets[0] = 0
+		extOffsets[1:] = offsets
+
+		alphas = self.GPUArray.empty((T * (2 * int(offsets[-1]) + batchsize), ), dtype=np.float32, allocator=allocator)
+		offsets = self.GPUArray.toGpu(extOffsets, allocator=allocator)
+
+		nll = self.GPUArray.empty((batchsize, ), dtype=np.float32, allocator=allocator)
+
+		error = self.GPUArray.zeros((), dtype=np.float32, allocator=allocator) if error is None else error
+		grad = self.GPUArray.zeros(data.shape, dtype=np.float32, allocator=allocator)
+
+		mod.calcAlphas(
+			data, datalen, np.int32(T), np.int32(vocabsize), labels, offsets, alphas, np.int32(blank),
+			nll, error, block=(NT, 1, 1), grid=(batchsize, 1, 1)
 		)
 
-	offsets = np.cumsum(lengths, dtype=np.int32)
-	extOffsets = np.empty(shape=(batchsize + 1, ), dtype=np.int32)
+		mod.calcBetas(
+			data, datalen, np.int32(T), np.int32(vocabsize), labels, offsets, alphas, np.int32(blank),
+			nll, grad, block=(NT, 1, 1), grid=(batchsize, 1, 1)
+		)
 
-	extOffsets[0] = 0
-	extOffsets[1:] = offsets
-
-	alphas = GPUArray.empty((T * (2 * int(offsets[-1]) + batchsize), ), dtype=np.float32, allocator=memPool)
-	offsets = GPUArray.toGpu(extOffsets, allocator=memPool)
-
-	nll = GPUArray.empty((batchsize, ), dtype=np.float32, allocator=memPool)
-
-	error = GPUArray.zeros((), dtype=np.float32, allocator=memPool) if error is None else error
-	grad = GPUArray.zeros(data.shape, dtype=np.float32, allocator=memPool)
-
-	mod.calcAlphas(
-		data, datalen, np.int32(T), np.int32(vocabsize), labels, offsets, alphas, np.int32(blank),
-		nll, error, block=(NT, 1, 1), grid=(batchsize, 1, 1)
-	)
-
-	mod.calcBetas(
-		data, datalen, np.int32(T), np.int32(vocabsize), labels, offsets, alphas, np.int32(blank),
-		nll, grad, block=(NT, 1, 1), grid=(batchsize, 1, 1)
-	)
-
-	return (error, grad) if not returnAlphas else (error, grad, alphas)
+		return (error, grad) if not returnAlphas else (error, grad, alphas)
 
 
 def unittest():
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend, CTCModule)
+
+
+def backendTest(Backend, Module):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = Module(Backend.getBackend(deviceIdx, initmode=1))
+		ctcLossTest(module)
+
+
+def ctcLossTest(module):
 	times, batchsize, vocabsize = 20, 3, 6
 	hostData, hostDataLen, hostLabels, lengths = createData(times, batchsize, vocabsize)
 
-	data, datalen, labels = GPUArray.toGpu(hostData), GPUArray.toGpu(hostDataLen), GPUArray.toGpu(hostLabels)
+	data, datalen = module.GPUArray.toGpu(hostData), module.GPUArray.toGpu(hostDataLen)
+	labels = module.GPUArray.toGpu(hostLabels)
+
 	blank = 0
 
-	error, grad, alphas = ctcLoss(data, datalen, labels, lengths, blank, returnAlphas=True)
-	hostError, hostGrad, hostAlphas = ctcLossTest(hostData, hostDataLen, hostLabels, lengths, blank)
+	error, grad, alphas = module.ctcLoss(data, datalen, labels, lengths, blank, returnAlphas=True)
+	hostError, hostGrad, hostAlphas = hostCTCLoss(hostData, hostDataLen, hostLabels, lengths, blank)
 
 	assert np.allclose(hostAlphas, alphas.get())
 
@@ -308,7 +325,7 @@ def logPlus(a, b):
 	return math.log1p(math.exp(-math.fabs(a - b))) + max(a, b)
 
 
-def ctcLossTest(data, datalen, labels, lengths, blank):
+def hostCTCLoss(data, datalen, labels, lengths, blank):
 	data = hostSoftmax(data)
 
 	alphas, nll = calcAlphasTest(data, datalen, labels, lengths, blank)

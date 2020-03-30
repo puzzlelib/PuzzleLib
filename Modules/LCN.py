@@ -20,17 +20,10 @@ class LCN(LRN):
 		self.size = self.repeat(N, 2)
 		self.pad = (self.size[0] // 2, self.size[1] // 2)
 
+		self.gradUsesOutData = Config.backend != Config.Backend.cuda
+
 		self.includePad = includePad
-
-		if Config.backend != Config.Backend.cuda:
-			assert includePad == True
-			self.mode = PoolMode.avg
-			self.gradUsesOutData = True
-
-		elif includePad:
-			self.mode = PoolMode.avgWithPad
-		else:
-			self.mode = PoolMode.avgNoPad
+		self.mode = PoolMode.avgWithPad if includePad else PoolMode.avgNoPad
 
 		self.means = None
 		self.poolspace = None

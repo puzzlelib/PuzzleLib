@@ -6,9 +6,9 @@ PyObject *CuDnn_Error = NULL;
 
 
 PyDoc_STRVAR(CuDnn_getVersion_doc, "getVersion() -> int");
-static PyObject *CuDnn_getVersion(PyObject *self, PyObject *args)
+static PyObject *CuDnn_getVersion(PyObject *type, PyObject *args)
 {
-	(void)self, (void)args;
+	(void)type, (void)args;
 
 	size_t version = cudnnGetVersion();
 	return Py_BuildValue("n", (Py_ssize_t)version);
@@ -68,7 +68,9 @@ static PyObject *CuDnn_Context_enableTensorOps(PyObject *self, PyObject *args)
 		return NULL;
 
 	pyctx->mathType = enable ? CUDNN_TENSOR_OP_MATH : CUDNN_DEFAULT_MATH;
-	Py_RETURN_NONE;
+
+	Py_INCREF(self);
+	return self;
 }
 
 
@@ -1150,6 +1152,7 @@ static PyGetSetDef CuDnn_Context_getset[] = {
 #endif
 
 static PyMethodDef CuDnn_Context_methods[] = {
+	{"getVersion", CuDnn_getVersion, METH_STATIC | METH_NOARGS, CuDnn_getVersion_doc},
 	{"enableTensorOps", CuDnn_Context_enableTensorOps, METH_VARARGS, CuDnn_Context_enableTensorOps_doc},
 
 	{"convNd", (PyCFunction)CuDnn_Context_pyConvNd, METH_VARARGS | METH_KEYWORDS, CuDnn_Context_pyConvNd_doc},
@@ -1244,16 +1247,11 @@ static PyType_Spec CuDnn_Context_TypeSpec = {
 PyTypeObject *CuDnn_Context_Type = NULL;
 
 
-static PyMethodDef CuDnn_methods[] = {
-	{"getVersion", CuDnn_getVersion, METH_NOARGS, CuDnn_getVersion_doc},
-	{NULL, NULL, 0, NULL}
-};
-
 static PyModuleDef CuDnn_module = {
 	PyModuleDef_HEAD_INIT,
 	CUDNN_BACKEND_NAME,
 	NULL, 0,
-	CuDnn_methods,
+	NULL,
 	NULL, NULL, NULL, NULL
 };
 

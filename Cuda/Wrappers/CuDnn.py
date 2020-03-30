@@ -1,133 +1,32 @@
-import multiprocessing, itertools
-from enum import Enum
-
+import itertools
 import numpy as np
-
-from PuzzleLib import Config
-
-from PuzzleLib.Cuda.Driver import CuDnn
-from PuzzleLib.Cuda.GPUArray import GPUArray
-
-from PuzzleLib.Cuda.Utils import dtypesSupported
-
-
-class ConvFwdAlgo(Enum):
-	implicitGemm = CuDnn.CONV_FWD_IMPLICIT_GEMM
-	implicitPrecompGemm = CuDnn.CONV_FWD_IMPLICIT_PRECOMP_GEMM
-	gemm = CuDnn.CONV_FWD_GEMM
-	direct = CuDnn.CONV_FWD_DIRECT
-	fft = CuDnn.CONV_FWD_FFT
-	fftTiling = CuDnn.CONV_FWD_FFT_TILING
-	winograd = CuDnn.CONV_FWD_WINOGRAD
-	winogradNonfused = CuDnn.CONV_FWD_WINOGRAD_NONFUSED
-
-
-class ConvBwdDataAlgo(Enum):
-	algo0 = CuDnn.CONV_BWD_DATA_ALGO_0
-	algo1 = CuDnn.CONV_BWD_DATA_ALGO_1
-	fft = CuDnn.CONV_BWD_DATA_FFT
-	fftTiling = CuDnn.CONV_BWD_DATA_FFT_TILING
-	winograd = CuDnn.CONV_BWD_DATA_WINOGRAD
-	winogradNonfused = CuDnn.CONV_BWD_DATA_WINOGRAD_NONFUSED
-
-
-class ConvBwdFilterAlgo(Enum):
-	algo0 = CuDnn.CONV_BWD_PARAM_ALGO_0
-	algo1 = CuDnn.CONV_BWD_PARAM_ALGO_1
-	fft = CuDnn.CONV_BWD_PARAM_FFT
-	algo3 = CuDnn.CONV_BWD_PARAM_ALGO_3
-	winograd = CuDnn.CONV_BWD_PARAM_WINOGRAD
-	winogradNonfused = CuDnn.CONV_BWD_PARAM_WINOGRAD_NONFUSED
-	fftTiling = CuDnn.CONV_BWD_PARAM_FFT_TILING
-
-
-class PoolMode(Enum):
-	max = CuDnn.POOL_MODE_MAX
-	avgWithPad = CuDnn.POOL_MODE_AVG_WITH_PAD
-	avgNoPad = CuDnn.POOL_MODE_AVG_NO_PAD
-	maxDeterminism = CuDnn.POOL_MODE_MAX_DETERMINISM
-
-
-class SoftMaxMode(Enum):
-	perActivation = CuDnn.SOFTMAX_MODE_PER_ACTIVATION
-	spatial = CuDnn.SOFTMAX_MODE_SPATIAL
-
-
-class MathType(Enum):
-	default = CuDnn.MATH_DEFAULT
-	tensorOp = CuDnn.MATH_TENSOR_OP
-	tensorOpAllowConv = CuDnn.MATH_TENSOR_OP_ALLOW_CONVERSION
-
-
-class ConvPerf:
-	def __init__(self, algo, time, memory, determinism, mathType):
-		self.algo = algo
-		self.time = time
-		self.memory = memory
-		self.determinism = determinism == 1
-		self.mathType = MathType(mathType)
-
-
-	def toString(self):
-		return "%-40s %-25s %-28s %-20s %s" % (
-			"Algo %s" % self.algo, "time %.6f secs" % self.time,
-			"memory %.6f mbytes" % (self.memory / 1024**2), "determinism=%s" % self.determinism,
-			"mathType=%s" % self.mathType
-		)
-
-
-	def __str__(self):
-		return self.toString()
-
-
-	def __repr__(self):
-		return self.toString()
-
-
-def convNdbenchmark(datashape, Wshape, dtype, stride=1, pad=0, dilation=1, groups=1, algoCount=10):
-	results = context.convNdbenchmark(datashape, Wshape, dtype, stride, pad, dilation, groups, algoCount)
-	results = tuple(
-		[ConvPerf(algotype(values[0]), *values[1:]) for values in subresults] for algotype, subresults in
-		zip((ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo), results)
-	)
-
-	return results
-
-
-context = None
-
-
-def autoinit():
-	global context
-	context = CuDnn.DnnContext()
-
-	if Config.systemLog:
-		print("[%s]: Created CuDnn context (Using version: %s)" % (Config.libname, CuDnn.getVersion()))
-
-	context.enableTensorOps(True)
-
-
-if context is None and (multiprocessing.current_process().name == "MainProcess" or Config.allowMultiContext):
-	autoinit()
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
-		conv2dTest(dtype, atol)
-		conv3dTest(dtype, atol)
-		convGroupTest(dtype, atol)
-
-		deconv2dTest(dtype, atol)
-		deconv3dTest(dtype, atol)
-		deconvGroupTest(dtype, atol)
-
-		maxpool2dTest(dtype, atol)
-		maxpool3dTest(dtype, atol)
-
-		softmax2dTest(dtype, atol)
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def conv2dTest(dtype, atol):
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		bnd = Backend.getBackend(deviceIdx, initmode=1)
+
+		for dtype, atol in bnd.dtypesSupported():
+			conv2dTest(bnd, dtype, atol)
+			conv3dTest(bnd, dtype, atol)
+			convGroupTest(bnd, dtype, atol)
+
+			deconv2dTest(bnd, dtype, atol)
+			deconv3dTest(bnd, dtype, atol)
+			deconvGroupTest(bnd, dtype, atol)
+
+			maxpool2dTest(bnd, dtype, atol)
+			maxpool3dTest(bnd, dtype, atol)
+
+			softmax2dTest(bnd, dtype, atol)
+
+
+def conv2dTest(bnd, dtype, atol):
 	batchsize, inmaps, h, w = 1, 2, 6, 6
 	outmaps, fsize, stride = 4, 2, 2
 
@@ -135,8 +34,8 @@ def conv2dTest(dtype, atol):
 	hostW = np.random.randn(outmaps, inmaps, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNd(data, W, bias, stride=stride)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNd(data, W, bias, stride=stride)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 
@@ -151,8 +50,8 @@ def conv2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNdBackwardData(grad, W, data=data, stride=stride)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNdBackwardData(grad, W, data=data, stride=stride)
 
 	hostInGrad = np.zeros(data.shape).astype(np.float32)
 
@@ -165,7 +64,7 @@ def conv2dTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(data, grad, W, stride=stride, withbias=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(data, grad, W, stride=stride, withbias=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for b, oc, ic, dy, dx, y, x in itertools.product(
@@ -181,7 +80,7 @@ def conv2dTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def conv3dTest(dtype, atol):
+def conv3dTest(bnd, dtype, atol):
 	batchsize, inmaps, d, h, w = 1, 2, 4, 4, 4
 	outmaps, fsize, s = 3, 2, 2
 
@@ -189,8 +88,8 @@ def conv3dTest(dtype, atol):
 	hostW = np.random.randn(outmaps, inmaps, fsize, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNd(data, W, bias, stride=s)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNd(data, W, bias, stride=s)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 
@@ -205,8 +104,8 @@ def conv3dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNdBackwardData(grad, W, data=data, stride=s)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNdBackwardData(grad, W, data=data, stride=s)
 
 	hostInGrad = np.zeros(data.shape).astype(np.float32)
 
@@ -219,7 +118,7 @@ def conv3dTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(data, grad, W, stride=s, withbias=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(data, grad, W, stride=s, withbias=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for b, oc, ic, dz, dy, dx, z, y, x in itertools.product(
@@ -235,7 +134,7 @@ def conv3dTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def convGroupTest(dtype, atol):
+def convGroupTest(bnd, dtype, atol):
 	batchsize, inmaps, h, w = 5, 6, 3, 4
 	outmaps, groups, fsize = 4, 2, 2
 
@@ -243,8 +142,8 @@ def convGroupTest(dtype, atol):
 	hostW = np.random.randn(outmaps, inmaps // groups, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNd(data, W, bias, groups=groups)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNd(data, W, bias, groups=groups)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 	ingroup, outgroup = inmaps // groups, outmaps // groups
@@ -264,8 +163,8 @@ def convGroupTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNdBackwardData(grad, W, groups=groups)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNdBackwardData(grad, W, groups=groups)
 
 	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
@@ -282,7 +181,7 @@ def convGroupTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(data, grad, W, groups=groups, withbias=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(data, grad, W, groups=groups, withbias=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for g in range(groups):
@@ -302,7 +201,7 @@ def convGroupTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def deconv2dTest(dtype, atol):
+def deconv2dTest(bnd, dtype, atol):
 	batchsize, inmaps, h, w = 1, 1, 2, 2
 	outmaps, fsize, stride = 1, 3, 2
 
@@ -310,8 +209,8 @@ def deconv2dTest(dtype, atol):
 	hostW = np.random.randn(inmaps, outmaps, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNdBackwardData(data, W, bias, stride=stride)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNdBackwardData(data, W, bias, stride=stride)
 
 	hostOutData = np.zeros(outdata.shape).astype(np.float32)
 
@@ -325,8 +224,8 @@ def deconv2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNd(grad, W, stride=stride)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNd(grad, W, stride=stride)
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -338,7 +237,7 @@ def deconv2dTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(grad, data, W, stride=stride, withbias=True, deconv=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(grad, data, W, stride=stride, withbias=True, deconv=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for b, ic, oc, dy, dx, y, x in itertools.product(
@@ -353,7 +252,7 @@ def deconv2dTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def deconv3dTest(dtype, atol):
+def deconv3dTest(bnd, dtype, atol):
 	batchsize, inmaps, d, h, w = 1, 2, 2, 2, 2
 	outmaps, fsize, s = 2, 2, 2
 
@@ -361,8 +260,8 @@ def deconv3dTest(dtype, atol):
 	hostW = np.random.randn(inmaps, outmaps, fsize, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNdBackwardData(data, W, bias, stride=s)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNdBackwardData(data, W, bias, stride=s)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 
@@ -377,8 +276,8 @@ def deconv3dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNd(grad, W, stride=s)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNd(grad, W, stride=s)
 
 	hostInGrad = np.zeros(data.shape, dtype=np.float32)
 
@@ -391,7 +290,7 @@ def deconv3dTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(grad, data, W, stride=s, withbias=True, deconv=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(grad, data, W, stride=s, withbias=True, deconv=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for b, ic, oc, dz, dy, dx, z, y, x in itertools.product(
@@ -407,7 +306,7 @@ def deconv3dTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def deconvGroupTest(dtype, atol):
+def deconvGroupTest(bnd, dtype, atol):
 	batchsize, inmaps, h, w = 3, 4, 3, 4
 	outmaps, groups, fsize = 4, 2, 2
 
@@ -415,8 +314,8 @@ def deconvGroupTest(dtype, atol):
 	hostW = np.random.randn(inmaps, outmaps // groups, fsize, fsize).astype(dtype)
 	hostBias = np.random.randn(outmaps).astype(dtype)
 
-	data, W, bias = GPUArray.toGpu(hostData), GPUArray.toGpu(hostW), GPUArray.toGpu(hostBias)
-	outdata = context.convNdBackwardData(data, W, bias, groups=groups)
+	data, W, bias = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostW), bnd.GPUArray.toGpu(hostBias)
+	outdata = bnd.dnn.convNdBackwardData(data, W, bias, groups=groups)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 	ingroup, outgroup = inmaps // groups, outmaps // groups
@@ -436,8 +335,8 @@ def deconvGroupTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.convNd(grad, W, groups=groups)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.convNd(grad, W, groups=groups)
 
 	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
@@ -454,7 +353,7 @@ def deconvGroupTest(dtype, atol):
 	hostInGrad = hostInGrad.astype(dtype)
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
-	wgrad, bgrad = context.convNdBackwardParams(grad, data, W, groups=groups, withbias=True, deconv=True)
+	wgrad, bgrad = bnd.dnn.convNdBackwardParams(grad, data, W, groups=groups, withbias=True, deconv=True)
 	hostWGrad = np.zeros(wgrad.shape, dtype=np.float32)
 
 	for g in range(groups):
@@ -474,15 +373,15 @@ def deconvGroupTest(dtype, atol):
 	assert np.allclose(hostBiasGrad, bgrad.get())
 
 
-def maxpool2dTest(dtype, atol):
+def maxpool2dTest(bnd, dtype, atol):
 	batchsize, maps, h, w = 3, 2, 6, 6
 	size, stride, pad = 3, 2, 1
 
 	hostData = np.full(shape=(batchsize, maps, h + 2 * pad, w + 2 * pad), fill_value=np.finfo(dtype).min, dtype=dtype)
 	hostData[:, :, pad:-pad, pad:-pad] = np.random.randn(batchsize, maps, h, w).astype(dtype)
 
-	data = GPUArray.toGpu(hostData[:, :, pad:-pad, pad:-pad])
-	outdata = context.poolNd(data, size=size, stride=stride, pad=pad, mode=CuDnn.POOL_MODE_MAX)
+	data = bnd.GPUArray.toGpu(hostData[:, :, pad:-pad, pad:-pad])
+	outdata = bnd.dnn.poolNd(data, size=size, stride=stride, pad=pad, mode=bnd.PoolMode.max.value)
 
 	hostOutData = np.empty(outdata.shape, dtype=dtype)
 
@@ -495,8 +394,8 @@ def maxpool2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.poolNdBackward(grad, data, outdata, size=size, stride=stride, pad=pad, mode=CuDnn.POOL_MODE_MAX)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.poolNdBackward(grad, data, outdata, size=size, stride=stride, pad=pad, mode=bnd.PoolMode.max.value)
 
 	hostInGrad = np.zeros(hostData.shape, dtype=dtype)
 
@@ -511,7 +410,7 @@ def maxpool2dTest(dtype, atol):
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
 
-def maxpool3dTest(dtype, atol):
+def maxpool3dTest(bnd, dtype, atol):
 	batchsize, maps, d, h, w = 1, 1, 6, 6, 6
 	size, s, pad = 3, 2, 1
 
@@ -520,8 +419,8 @@ def maxpool3dTest(dtype, atol):
 	)
 	hostData[:, :, pad:-pad, pad:-pad, pad:-pad] = np.random.randn(batchsize, maps, d, h, w).astype(dtype)
 
-	data = GPUArray.toGpu(np.ascontiguousarray(hostData[:, :, pad:-pad, pad:-pad, pad:-pad]))
-	outdata = context.poolNd(data, size=size, stride=s, pad=pad, mode=CuDnn.POOL_MODE_MAX)
+	data = bnd.GPUArray.toGpu(np.ascontiguousarray(hostData[:, :, pad:-pad, pad:-pad, pad:-pad]))
+	outdata = bnd.dnn.poolNd(data, size=size, stride=s, pad=pad, mode=bnd.PoolMode.max.value)
 
 	hostOutData = np.empty(outdata.shape, dtype=dtype)
 
@@ -535,8 +434,8 @@ def maxpool3dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.poolNdBackward(grad, data, outdata, size=size, stride=s, pad=pad, mode=CuDnn.POOL_MODE_MAX)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.poolNdBackward(grad, data, outdata, size=size, stride=s, pad=pad, mode=bnd.PoolMode.max.value)
 
 	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
@@ -552,12 +451,12 @@ def maxpool3dTest(dtype, atol):
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
 
-def softmax2dTest(dtype, atol):
+def softmax2dTest(bnd, dtype, atol):
 	batchsize, maps, h, w = 5, 8, 2, 3
 	hostData = np.random.randn(batchsize, maps, h, w).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = context.softmaxNd(data)
+	data = bnd.GPUArray.toGpu(hostData)
+	outdata = bnd.dnn.softmaxNd(data)
 
 	def hostSoftmax(tensor):
 		e = np.exp(tensor - np.amax(tensor))
@@ -572,8 +471,8 @@ def softmax2dTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = context.softmaxNdBackward(grad, outdata)
+	grad = bnd.GPUArray.toGpu(hostGrad)
+	ingrad = bnd.dnn.softmaxNdBackward(grad, outdata)
 
 	hostInGrad = np.empty(ingrad.shape, dtype=dtype)
 

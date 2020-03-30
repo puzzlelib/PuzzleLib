@@ -1,8 +1,5 @@
 import numpy as np
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import device, warpSize, roundUpDiv, memoryPool as memPool
+from PuzzleLib.Cuda.Utils import roundUpDiv
 
 
 embedTmpl = """
@@ -40,52 +37,67 @@ __global__ void embedBackwardParams(float *vocabulary, const float *outgrad, con
 """
 
 
-if device is not None:
-	mod = SourceModule(embedTmpl)
+class EmbedModule:
+	def __init__(self, backend):
+		self.GPUArray, self.warpSize = backend.GPUArray, backend.warpSize
+
+		self.mod = backend.SourceModule(embedTmpl)
+		self.block = (self.warpSize, backend.nthreads // self.warpSize, 1)
 
 
-def embed(data, W, allocator=memPool):
-	assert data.dtype == np.int32 and W.dtype == np.float32
+	def embed(self, data, W, allocator=None):
+		assert data.dtype == np.int32 and W.dtype == np.float32
 
-	batchsize, sentlen = data.shape
-	_, embsize = W.shape
+		batchsize, sentlen = data.shape
+		_, embsize = W.shape
 
-	outdata = GPUArray.zeros((batchsize, sentlen, embsize), dtype=np.float32, allocator=allocator)
-	size = batchsize * sentlen
+		outdata = self.GPUArray.zeros((batchsize, sentlen, embsize), dtype=np.float32, allocator=allocator)
+		size = batchsize * sentlen
 
-	block = (warpSize, warpSize, 1)
-	grid = (roundUpDiv(embsize, warpSize), roundUpDiv(size, warpSize), 1)
+		xblock, yblock, _ = self.block
+		grid = (roundUpDiv(embsize, xblock), roundUpDiv(size, yblock), 1)
 
-	mod.embed(outdata, data, W, np.int32(size), np.int32(embsize), block=block, grid=grid)
-	return outdata
+		self.mod.embed(outdata, data, W, np.int32(size), np.int32(embsize), block=self.block, grid=grid)
+		return outdata
 
 
-def embedBackwardParams(indata, grad, W, scale):
-	assert indata.shape == grad.shape[:2] and W.shape[1] == grad.shape[2]
-	assert indata.dtype == np.int32 and grad.dtype == W.dtype and W.dtype == np.float32
+	def embedBackwardParams(self, indata, grad, W, scale):
+		assert indata.shape == grad.shape[:2] and W.shape[1] == grad.shape[2]
+		assert indata.dtype == np.int32 and grad.dtype == W.dtype and W.dtype == np.float32
 
-	batchsize, sentlen = indata.shape
-	_, embsize = W.shape
+		batchsize, sentlen = indata.shape
+		_, embsize = W.shape
 
-	size = batchsize * sentlen
+		size = batchsize * sentlen
 
-	block = (warpSize, warpSize, 1)
-	grid = (roundUpDiv(embsize, warpSize), roundUpDiv(size, warpSize), 1)
+		xblock, yblock, _ = self.block
+		grid = (roundUpDiv(embsize, xblock), roundUpDiv(size, yblock), 1)
 
-	mod.embedBackwardParams(
-		W, grad, indata, np.float32(scale), np.int32(size), np.int32(embsize), block=block, grid=grid
-	)
+		self.mod.embedBackwardParams(
+			W, grad, indata, np.float32(scale), np.int32(size), np.int32(embsize), block=self.block, grid=grid
+		)
 
 
 def unittest():
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
+
+
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = EmbedModule(Backend.getBackend(deviceIdx))
+		embedTest(module)
+
+
+def embedTest(module):
 	batchsize, sentlen, embsize = 10, 5, 20
 	vocabsize = 1000
 
 	hostInData = np.random.randint(low=-1, high=vocabsize, size=(batchsize, sentlen), dtype=np.int32)
 	hostW = np.random.randn(vocabsize, embsize).astype(np.float32)
 
-	indata, W = GPUArray.toGpu(hostInData), GPUArray.toGpu(hostW)
-	outdata = embed(indata, W)
+	indata, W = module.GPUArray.toGpu(hostInData), module.GPUArray.toGpu(hostW)
+	outdata = module.embed(indata, W)
 
 	hostOutData = np.zeros(outdata.shape, dtype=np.float32)
 
@@ -101,8 +113,8 @@ def unittest():
 	learnRate = 0.1
 	hostGrad = np.random.randn(*outdata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	embedBackwardParams(indata, grad, W, learnRate)
+	grad = module.GPUArray.toGpu(hostGrad)
+	module.embedBackwardParams(indata, grad, W, learnRate)
 
 	hostGrad = grad.get()
 	for b in range(batchsize):

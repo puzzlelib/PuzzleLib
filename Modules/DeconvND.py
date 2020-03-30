@@ -40,7 +40,7 @@ class DeconvND(Module):
 			return
 
 		Wshape = (inmaps, outmaps, *self.repeat(size, nd))
-		W = self.createTensorWithScheme(initscheme, Wshape, wscale, self.calcNeuronsNumber(Wshape, True))
+		W = self.createTensorWithScheme(initscheme, Wshape, wscale, factorTranspose=True)
 
 		self.setVar("W", Variable(gpuarray.empty(Wshape, dtype=self.calctype) if W is None else gpuarray.to_gpu(W)))
 
@@ -50,7 +50,7 @@ class DeconvND(Module):
 
 
 	def optimizeForShape(self, shape, memlimit=None):
-		if Config.backend == Config.backend.cuda:
+		if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
 			shape = self.dataShapeFrom(shape)
 
 		fwdRes, bwdFilterRes, bwdDataRes = convNdbenchmark(
@@ -70,7 +70,7 @@ class DeconvND(Module):
 			self.bwdFilterAlgo = ConvBwdFilterAlgo.algo0
 			self.bwdDataAlgo = ConvBwdDataAlgo.algo0
 
-		elif Config.backend == Config.Backend.intel:
+		elif Config.backend in {Config.Backend.hip, Config.Backend.intel}:
 			self.fwdAlgo = ConvFwdAlgo.auto
 			self.bwdFilterAlgo = ConvBwdFilterAlgo.auto
 			self.bwdDataAlgo = ConvBwdDataAlgo.auto
@@ -107,7 +107,7 @@ class DeconvND(Module):
 
 
 	def calcMode(self, T):
-		if Config.backend == Config.Backend.cuda:
+		if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
 			if self.calctype == T:
 				return
 

@@ -51,6 +51,23 @@ static PyObject *Cuda_Device_getAttribute(PyObject *self, PyObject *args)
 }
 
 
+#ifdef CUDA_BACKEND_IS_HIP
+
+PyDoc_STRVAR(Cuda_Device_getArch_doc, "getArch(self) -> int");
+static PyObject *Cuda_Device_getArch(PyObject *self, PyObject *args)
+{
+	(void)args;
+	Cuda_Device *pydevice = (Cuda_Device *)self;
+
+	hipDeviceProp_t prop;
+	CUDA_ENFORCE(hipGetDeviceProperties(&prop, pydevice->index));
+
+	return Py_BuildValue("i", prop.gcnArch);
+}
+
+#endif
+
+
 PyDoc_STRVAR(Cuda_Device_name_doc, "name(self) -> str");
 static PyObject *Cuda_Device_name(PyObject *self, PyObject *args)
 {
@@ -146,6 +163,10 @@ static PyMethodDef Cuda_Device_methods[] = {
 	{"name", Cuda_Device_name, METH_NOARGS, Cuda_Device_name_doc},
 	{"computeCapability", Cuda_Device_computeCapability, METH_NOARGS, Cuda_Device_computeCapability_doc},
 	{"globalMemory", Cuda_Device_globalMemory, METH_NOARGS, Cuda_Device_globalMemory_doc},
+
+#ifdef CUDA_BACKEND_IS_HIP
+	{"getArch", Cuda_Device_getArch, METH_NOARGS, Cuda_Device_getArch_doc},
+#endif
 
 	{"synchronize", Cuda_Device_synchronize, METH_STATIC | METH_NOARGS, Cuda_Device_synchronize_doc},
 	{"getCurrent", Cuda_Device_pyGetCurrent, METH_STATIC | METH_NOARGS, Cuda_Device_pyGetCurrent_doc},

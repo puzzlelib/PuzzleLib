@@ -46,7 +46,7 @@ class ConverterError(Exception):
 	pass
 
 
-def buildRTEngine(net, inshape, savepath, dtype, calibrator=None, workspace=1 << 22, returnEngine=True, log=True):
+def buildRTEngine(net, inshape, savepath, dtype, calibrator=None, workspace=1 << 30, returnEngine=True, log=True):
 	outshape = net.dataShapeFrom(inshape)
 	batchsize, inshape = inshape[0], inshape[1:]
 

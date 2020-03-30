@@ -6,10 +6,13 @@ embedBackwardParams = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -17,19 +20,25 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Kernels import Embedder
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
+
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	memoryPool, embedmod = backend.memoryPool, backend.embedmod
+
+	def wrapEmbed(data, W):
+		return embedmod.embed(data, W, memoryPool)
 
 	global embed, embedBackwardParams
-	embed = Embedder.embed
-	embedBackwardParams = Embedder.embedBackwardParams
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Kernels import Embedder
-
-	global embed, embedBackwardParams
-	embed = Embedder.embed
-	embedBackwardParams = Embedder.embedBackwardParams
+	embed = wrapEmbed
+	embedBackwardParams = embedmod.embedBackwardParams
 
 
 def initCPU():

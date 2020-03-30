@@ -1,10 +1,7 @@
 from string import Template
-
 import numpy as np
 
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import device, prod, roundUpDiv, nthreads, memoryPool as memPool
+from PuzzleLib.Cuda.Utils import prod, roundUpDiv
 
 
 poolTmpl = Template("""
@@ -117,114 +114,124 @@ __global__ void maxunpool2dBackward(float *ingrad, const float *outgrad, const i
 """)
 
 
-if device is not None:
-	mod = SourceModule(poolTmpl.substitute(initVal=str(np.finfo(np.float32).min)))
+class PoolModule:
+	def __init__(self, backend):
+		self.GPUArray, self.nthreads = backend.GPUArray, backend.nthreads
+		self.mod = backend.SourceModule(poolTmpl.substitute(initVal=str(np.finfo(np.float32).min)))
 
 
-def maxpool2d(data, size, stride, pad, allocator=memPool):
-	assert data.dtype == np.float32
-	batchsize, maps, inh, inw = data.shape
+	def maxpool2d(self, data, size, stride, pad, allocator=None):
+		assert data.dtype == np.float32
+		batchsize, maps, inh, inw = data.shape
 
-	fh, fw = size
-	hstride, wstride = stride
-	hpad, wpad = pad
+		fh, fw = size
+		hstride, wstride = stride
+		hpad, wpad = pad
 
-	outh = (inh - fh + 2 * hpad) // hstride + 1
-	outw = (inw - fw + 2 * wpad) // wstride + 1
+		outh = (inh - fh + 2 * hpad) // hstride + 1
+		outw = (inw - fw + 2 * wpad) // wstride + 1
 
-	outdata = GPUArray.empty((batchsize, maps, outh, outw), dtype=np.float32, allocator=allocator)
-	mask = GPUArray.empty((batchsize, maps, outh, outw), dtype=np.int32, allocator=allocator)
+		outdata = self.GPUArray.empty((batchsize, maps, outh, outw), dtype=np.float32, allocator=allocator)
+		mask = self.GPUArray.empty((batchsize, maps, outh, outw), dtype=np.int32, allocator=allocator)
 
-	size = prod(outdata.shape)
+		size = prod(outdata.shape)
 
-	block = (nthreads, 1, 1)
-	grid = (roundUpDiv(size, nthreads), 1, 1)
+		block = (self.nthreads, 1, 1)
+		grid = (roundUpDiv(size, self.nthreads), 1, 1)
 
-	mod.maxpool2d(
-		outdata, data, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
-		np.int32(hstride), np.int32(wstride), np.int32(hpad), np.int32(wpad), np.int32(fh), np.int32(fw),
-		np.int32(size), block=block, grid=grid
-	)
+		self.mod.maxpool2d(
+			outdata, data, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
+			np.int32(hstride), np.int32(wstride), np.int32(hpad), np.int32(wpad), np.int32(fh), np.int32(fw),
+			np.int32(size), block=block, grid=grid
+		)
 
-	return outdata, mask
-
-
-def maxpool2dBackward(grad, origshape, mask, size, stride, pad, allocator=memPool):
-	assert grad.dtype == np.float32 and mask.dtype == np.int32
-	batchsize, maps, outh, outw = grad.shape
-
-	fh, fw = size
-	hstride, wstride = stride
-	hpad, wpad = pad
-
-	inh, inw = origshape[2], origshape[3]
-	ingrad = GPUArray.empty((batchsize, maps, inh, inw), dtype=np.float32, allocator=allocator)
-
-	size = prod(ingrad.shape)
-
-	block = (nthreads, 1, 1)
-	grid = (roundUpDiv(size, nthreads), 1, 1)
-
-	mod.maxpool2dBackward(
-		ingrad, grad, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
-		np.int32(hstride), np.int32(wstride), np.int32(hpad), np.int32(wpad), np.int32(fh), np.int32(fw),
-		np.int32(size), block=block, grid=grid
-	)
-
-	return ingrad
+		return outdata, mask
 
 
-def maxunpool2d(data, origshape, mask, allocator=memPool):
-	assert data.dtype == np.float32
-	batchsize, maps, inh, inw = data.shape
+	def maxpool2dBackward(self, grad, origshape, mask, size, stride, pad, allocator=None):
+		assert grad.dtype == np.float32 and mask.dtype == np.int32
+		batchsize, maps, outh, outw = grad.shape
 
-	outh, outw = origshape[2], origshape[3]
-	outdata = GPUArray.zeros((batchsize, maps, outh, outw), dtype=np.float32, allocator=allocator)
+		fh, fw = size
+		hstride, wstride = stride
+		hpad, wpad = pad
 
-	size = prod(data.shape)
+		inh, inw = origshape[2], origshape[3]
+		ingrad = self.GPUArray.empty((batchsize, maps, inh, inw), dtype=np.float32, allocator=allocator)
 
-	block = (nthreads, 1, 1)
-	grid = (roundUpDiv(size, nthreads), 1, 1)
+		size = prod(ingrad.shape)
 
-	mod.maxunpool2d(
-		outdata, data, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
-		np.int32(size), block=block, grid=grid
-	)
+		block = (self.nthreads, 1, 1)
+		grid = (roundUpDiv(size, self.nthreads), 1, 1)
 
-	return outdata
+		self.mod.maxpool2dBackward(
+			ingrad, grad, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
+			np.int32(hstride), np.int32(wstride), np.int32(hpad), np.int32(wpad), np.int32(fh), np.int32(fw),
+			np.int32(size), block=block, grid=grid
+		)
+
+		return ingrad
 
 
-def maxunpool2dBackward(grad, poolshape, mask, allocator=memPool):
-	assert grad.dtype == np.float32 and mask.dtype == np.int32
-	batchsize, maps, outh, outw = grad.shape
+	def maxunpool2d(self, data, origshape, mask, allocator=None):
+		assert data.dtype == np.float32
+		batchsize, maps, inh, inw = data.shape
 
-	inh, inw = poolshape[2], poolshape[3]
-	ingrad = GPUArray.empty((batchsize, maps, inh, inw), dtype=np.float32, allocator=allocator)
+		outh, outw = origshape[2], origshape[3]
+		outdata = self.GPUArray.zeros((batchsize, maps, outh, outw), dtype=np.float32, allocator=allocator)
 
-	size = prod(ingrad.shape)
+		size = prod(data.shape)
 
-	block = (nthreads, 1, 1)
-	grid = (roundUpDiv(size, nthreads), 1, 1)
+		block = (self.nthreads, 1, 1)
+		grid = (roundUpDiv(size, self.nthreads), 1, 1)
 
-	mod.maxunpool2dBackward(
-		ingrad, grad, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
-		np.int32(size), block=block, grid=grid
-	)
+		self.mod.maxunpool2d(
+			outdata, data, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
+			np.int32(size), block=block, grid=grid
+		)
 
-	return ingrad
+		return outdata
+
+
+	def maxunpool2dBackward(self, grad, poolshape, mask, allocator=None):
+		assert grad.dtype == np.float32 and mask.dtype == np.int32
+		batchsize, maps, outh, outw = grad.shape
+
+		inh, inw = poolshape[2], poolshape[3]
+		ingrad = self.GPUArray.empty((batchsize, maps, inh, inw), dtype=np.float32, allocator=allocator)
+
+		size = prod(ingrad.shape)
+
+		block = (self.nthreads, 1, 1)
+		grid = (roundUpDiv(size, self.nthreads), 1, 1)
+
+		self.mod.maxunpool2dBackward(
+			ingrad, grad, mask, np.int32(inh), np.int32(inw), np.int32(outh), np.int32(outw), np.int32(maps),
+			np.int32(size), block=block, grid=grid
+		)
+
+		return ingrad
 
 
 def unittest():
-	poolTest()
-	unpoolTest()
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def poolTest():
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = PoolModule(Backend.getBackend(deviceIdx))
+
+		poolTest(module)
+		unpoolTest(module)
+
+
+def poolTest(module):
 	batchsize, maps, h, w = 10, 4, 6, 6
 	size, stride, pad = 2, 2, 1
 
-	indata = GPUArray.toGpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
-	pooldata, mask = maxpool2d(indata, [size, size], [stride, stride], [pad, pad])
+	indata = module.GPUArray.toGpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
+	pooldata, mask = module.maxpool2d(indata, [size, size], [stride, stride], [pad, pad])
 
 	hostInData = np.zeros((batchsize, maps, h + 2 * pad, w + 2 * pad), dtype=np.float32)
 	hostInData[:, :, pad:-pad, pad:-pad] = indata.get()
@@ -257,8 +264,8 @@ def poolTest():
 
 	hostGrad = np.random.randn(*pooldata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = maxpool2dBackward(grad, indata.shape, mask, [size, size], [stride, stride], [pad, pad])
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.maxpool2dBackward(grad, indata.shape, mask, [size, size], [stride, stride], [pad, pad])
 
 	hostInGrad = np.empty(ingrad.shape, dtype=np.float32)
 
@@ -281,14 +288,14 @@ def poolTest():
 	assert np.allclose(hostInGrad, ingrad.get())
 
 
-def unpoolTest():
+def unpoolTest(module):
 	batchsize, maps, h, w = 10, 4, 6, 6
 	size, stride, pad = 2, 2, 1
 
-	indata = GPUArray.toGpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
+	indata = module.GPUArray.toGpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
 
-	pooldata, mask = maxpool2d(indata, [size, size], [stride, stride], [pad, pad])
-	unpooldata = maxunpool2d(pooldata, indata.shape, mask)
+	pooldata, mask = module.maxpool2d(indata, [size, size], [stride, stride], [pad, pad])
+	unpooldata = module.maxunpool2d(pooldata, indata.shape, mask)
 
 	hostPoolData = pooldata.get()
 	hostMask = mask.get()
@@ -306,8 +313,8 @@ def unpoolTest():
 
 	hostGrad = np.random.randn(*unpooldata.shape).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = maxunpool2dBackward(grad, pooldata.shape, mask)
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.maxunpool2dBackward(grad, pooldata.shape, mask)
 
 	hostInGrad = np.empty(ingrad.shape, dtype=np.float32)
 

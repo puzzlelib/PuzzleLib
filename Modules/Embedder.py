@@ -48,7 +48,7 @@ class Embedder(Module):
 		self.registerBlueprint(args, exclude=["onVocabulary"])
 
 		Wshape = (vocabsize, embsize)
-		W = self.createTensorWithScheme(initscheme, Wshape, wscale, self.calcNeuronsNumber(Wshape))
+		W = self.createTensorWithScheme(initscheme, Wshape, wscale, (embsize, vocabsize))
 		if W is None:
 			W = np.empty(Wshape, dtype=np.float32)
 
@@ -165,12 +165,6 @@ class Embedder(Module):
 	def reset(self):
 		super().reset()
 		self.outgrad = None
-
-
-	@classmethod
-	def calcNeuronsNumber(cls, shape, transpose=False):
-		shape = shape[1:]
-		return super().calcNeuronsNumber(shape, transpose)
 
 
 def unittest():

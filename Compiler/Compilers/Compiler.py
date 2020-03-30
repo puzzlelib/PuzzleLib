@@ -84,8 +84,8 @@ class Compiler:
 		return self
 
 
-	def addDefine(self, define):
-		self.defines.add(define)
+	def addDefine(self, *defines):
+		self.defines.update(defines)
 		return self
 
 

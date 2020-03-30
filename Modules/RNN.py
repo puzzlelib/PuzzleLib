@@ -98,9 +98,7 @@ class RNN(Module):
 							raise NotImplementedError(modifier)
 
 					else:
-						W = self.createTensorWithScheme(
-							initscheme, param.shape, wscale, self.calcNeuronsNumber(param.shape)
-						)
+						W = self.createTensorWithScheme(initscheme, param.shape, wscale)
 
 						if W is None:
 							continue

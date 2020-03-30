@@ -1,5 +1,4 @@
 from enum import Enum
-
 from PuzzleLib import Config
 
 
@@ -36,10 +35,13 @@ crossMapLRNBackward = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.backend == Config.Backend.cpu:
 		initCPU()
 	elif Config.backend == Config.Backend.intel:
@@ -49,31 +51,104 @@ def autoinit():
 
 
 def initCuda():
+	from PuzzleLib.Cuda import Backend
+
+	backend = initGPU(Backend)
+	memoryPool, dnn = backend.memoryPool, backend.dnn
+
+	def wrapPoolNd(data, size, stride, pad, mode, test):
+		return dnn.poolNd(data, size, stride, pad, mode.value, None, memoryPool), None
+
+	def wrapPoolNdBackward(indata, outdata, grad, _, size, stride, pad, mode):
+		return dnn.poolNdBackward(grad, indata, outdata, size, stride, pad, mode.value, None, memoryPool)
+
+	global PoolMode, poolNd, poolNdBackward
+	PoolMode = backend.PoolMode
+	poolNd = wrapPoolNd
+	poolNdBackward = wrapPoolNdBackward
+
+	def wrapMapLRN(data, means, N, alpha, beta, K, test):
+		return dnn.mapLRN(data, means, N, alpha, beta, K, allocator=memoryPool), None
+
+	def wrapMapLRNBackward(data, _, grad, means, __, N, alpha, beta, K):
+		return dnn.mapLRNBackward(data, grad, means, N, alpha, beta, K, allocator=memoryPool)
+
+	global mapLRN, mapLRNBackward
+	mapLRN = wrapMapLRN
+	mapLRNBackward = wrapMapLRNBackward
+
+	def wrapCrossMapLRN(data, N, alpha, beta, K, test):
+		return dnn.crossMapLRN(data, N, alpha, beta, K, allocator=memoryPool), None
+
+	def wrapCrossMapLRNBackward(data, outdata, grad, _, N, alpha, beta, K):
+		return dnn.crossMapLRNBackward(data, outdata, grad, N, alpha, beta, K, allocator=memoryPool)
+
+	global crossMapLRN, crossMapLRNBackward
+	crossMapLRN = wrapCrossMapLRN
+	crossMapLRNBackward = wrapCrossMapLRNBackward
+
+
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+	backend = initGPU(Backend)
+	memoryPool, dnn = backend.memoryPool, backend.dnn
+
+	def wrapPoolNd(data, size, stride, pad, mode, test):
+		result = dnn.poolNd(data, size, stride, pad, mode.value, test, None, memoryPool)
+		return result if not test else (result, None)
+
+	def wrapPoolNdBackward(indata, outdata, grad, workspace, size, stride, pad, mode):
+		return dnn.poolNdBackward(grad, indata, outdata, workspace, size, stride, pad, mode.value, None, memoryPool)
+
+	global PoolMode, poolNd, poolNdBackward
+	PoolMode = backend.PoolMode
+	poolNd = wrapPoolNd
+	poolNdBackward = wrapPoolNdBackward
+
+	def wrapMapLRN(data, means, N, alpha, beta, K, test):
+		assert means is None
+
+		result = dnn.lrn(data, N, alpha, beta, K, backend.LRNMode.map.value, test, allocator=memoryPool)
+		return result if not test else (result, None)
+
+	def wrapMapLRNBackward(data, outdata, grad, means, workspace, N, alpha, beta, K):
+		assert means is None
+		return dnn.lrnBackward(
+			grad, data, outdata, workspace, N, alpha, beta, K, backend.LRNMode.map.value, allocator=memoryPool
+		)
+
+	global mapLRN, mapLRNBackward
+	mapLRN = wrapMapLRN
+	mapLRNBackward = wrapMapLRNBackward
+
+
+def initGPU(Backend):
 	import numpy as np
 
-	from PuzzleLib.Cuda.Wrappers import CuDnn, CuDnnNorm
-	from PuzzleLib.Cuda.Wrappers.CuDnn import context
-	from PuzzleLib.Cuda.Utils import memoryPool
+	backend = Backend.getBackend(Config.deviceIdx, initmode=1)
+	memoryPool, dnn = backend.memoryPool, backend.dnn
 
 	global ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
-	ConvFwdAlgo = CuDnn.ConvFwdAlgo
-	ConvBwdDataAlgo = CuDnn.ConvBwdDataAlgo
-	ConvBwdFilterAlgo = CuDnn.ConvBwdFilterAlgo
+	ConvFwdAlgo = backend.ConvFwdAlgo
+	ConvBwdDataAlgo = backend.ConvBwdDataAlgo
+	ConvBwdFilterAlgo = backend.ConvBwdFilterAlgo
 
 	def wrapConvNd(data, W, bias, stride, pad, dilation, groups, algo):
-		return context.convNd(
+		return dnn.convNd(
 			data, W, bias.ravel() if bias is not None else None, stride, pad, dilation, groups,
 			algo.value, None, memoryPool
 		)
 
 	def wrapConvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
-		return context.convNdBackwardData(
+		return dnn.convNdBackwardData(
 			grad, W, None, data, stride, pad, dilation, groups, algo.value, None, memoryPool
 		)
 
 	def wrapConvNdBackwardParams(data, grad, W, bias, stride, pad, dilation, groups,
 								 wgrad, bgrad, scale, momentum, algo):
-		return context.convNdBackwardParams(
+		return dnn.convNdBackwardParams(
 			data, grad, W, stride, pad, dilation, groups, bias is not None, False,
 			wgrad, bgrad.ravel() if bgrad is not None else None, scale, momentum, algo.value, memoryPool
 		)
@@ -84,7 +159,7 @@ def initCuda():
 	convNdBackwardParams = wrapConvNdBackwardParams
 
 	def wrapConvNdbenchmark(datashape, Wshape, stride, pad, dilation, groups, transpose):
-		fwdResults, bwdDataResults, bwdParamResults = CuDnn.convNdbenchmark(
+		fwdResults, bwdDataResults, bwdParamResults = backend.convNdbenchmark(
 			datashape, Wshape, np.float32, stride, pad, dilation, groups
 		)
 
@@ -94,18 +169,18 @@ def initCuda():
 	convNdbenchmark = wrapConvNdbenchmark
 
 	def wrapDeconvNd(data, W, bias, stride, pad, dilation, groups, algo):
-		return context.convNdBackwardData(
+		return dnn.convNdBackwardData(
 			data, W, bias.ravel() if bias is not None else None, None, stride, pad, dilation, groups,
 			algo.value, None, memoryPool
 		)
 
 	def wrapDeconvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
 		assert data is not None
-		return context.convNd(grad, W, None, stride, pad, dilation, groups, algo.value, None, memoryPool)
+		return dnn.convNd(grad, W, None, stride, pad, dilation, groups, algo.value, None, memoryPool)
 
 	def wrapDeconvNdBackwardParams(data, grad, W, bias, stride, pad, dilation, groups,
 								   wgrad, bgrad, scale, momentum, algo):
-		return context.convNdBackwardParams(
+		return dnn.convNdBackwardParams(
 			grad, data, W, stride, pad, dilation, groups, bias is not None, True,
 			wgrad, bgrad.ravel() if bgrad is not None else None, scale, momentum, algo.value, memoryPool
 		)
@@ -115,23 +190,12 @@ def initCuda():
 	deconvNdBackwardData = wrapDeconvNdBackwardData
 	deconvNdBackwardParams = wrapDeconvNdBackwardParams
 
-	def wrapPoolNd(data, size, stride, pad, mode, test):
-		return context.poolNd(data, size, stride, pad, mode.value, None, memoryPool), None
-
-	def wrapPoolNdBackward(indata, outdata, grad, _, size, stride, pad, mode):
-		return context.poolNdBackward(grad, indata, outdata, size, stride, pad, mode.value, None, memoryPool)
-
-	global PoolMode, poolNd, poolNdBackward
-	PoolMode = CuDnn.PoolMode
-	poolNd = wrapPoolNd
-	poolNdBackward = wrapPoolNdBackward
-
 	global BatchNormMode
-	BatchNormMode = CuDnnNorm.BatchNormMode
+	BatchNormMode = backend.BatchNormMode
 
 	def wrapBatchNormNd(data, scale, bias, mean, var, epsilon, factor, test, mode=BatchNormMode.spatial, out=None):
 		shape = scale.shape
-		result = context.batchNormNd(
+		result = dnn.batchNormNd(
 			data, mean.ravel(), var.ravel(), scale.ravel(), bias.ravel(), epsilon, factor, test, mode.value, out=out,
 			allocator=memoryPool
 		)
@@ -144,9 +208,8 @@ def initCuda():
 
 	def wrapBatchNormNdBackward(data, grad, scale, savemean, saveinvvar, epsilon, mode=BatchNormMode.spatial):
 		shape = scale.shape
-		ingrad, scalegrad, bgrad = context.batchNormNdBackward(
-			grad, data, scale.ravel(), savemean.ravel(), saveinvvar.ravel(), epsilon, mode.value,
-			allocator=memoryPool
+		ingrad, scalegrad, bgrad = dnn.batchNormNdBackward(
+			grad, data, scale.ravel(), savemean.ravel(), saveinvvar.ravel(), epsilon, mode.value, allocator=memoryPool
 		)
 
 		return ingrad, scalegrad.reshape(shape), bgrad.reshape(shape)
@@ -156,139 +219,19 @@ def initCuda():
 	batchNormNdBackward = wrapBatchNormNdBackward
 
 	global SoftMaxMode
-	SoftMaxMode = CuDnn.SoftMaxMode
+	SoftMaxMode = backend.SoftMaxMode
 
 	def wrapSoftmaxNd(data, mode=SoftMaxMode.spatial):
-		return context.softmaxNd(data, mode.value, allocator=memoryPool)
+		return dnn.softmaxNd(data, mode.value, allocator=memoryPool)
 
 	def wrapSoftmaxNdBackward(outdata, grad):
-		return context.softmaxNdBackward(grad, outdata, allocator=memoryPool)
+		return dnn.softmaxNdBackward(grad, outdata, allocator=memoryPool)
 
 	global softmaxNd, softmaxNdBackward
 	softmaxNd = wrapSoftmaxNd
 	softmaxNdBackward = wrapSoftmaxNdBackward
 
-	def wrapMapLRN(data, means, N, alpha, beta, K, test):
-		return context.mapLRN(data, means, N, alpha, beta, K, allocator=memoryPool), None
-
-	def wrapMapLRNBackward(data, _, grad, means, __, N, alpha, beta, K):
-		return context.mapLRNBackward(data, grad, means, N, alpha, beta, K, allocator=memoryPool)
-
-	global mapLRN, mapLRNBackward
-	mapLRN = wrapMapLRN
-	mapLRNBackward = wrapMapLRNBackward
-
-	def wrapCrossMapLRN(data, N, alpha, beta, K, test):
-		return context.crossMapLRN(data, N, alpha, beta, K, allocator=memoryPool), None
-
-	def wrapCrossMapLRNBackward(data, outdata, grad, _, N, alpha, beta, K):
-		return context.crossMapLRNBackward(data, outdata, grad, N, alpha, beta, K, allocator=memoryPool)
-
-	global crossMapLRN, crossMapLRNBackward
-	crossMapLRN = wrapCrossMapLRN
-	crossMapLRNBackward = wrapCrossMapLRNBackward
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Wrappers import MIOpen
-
-	global ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
-	ConvFwdAlgo = MIOpen.ConvFwdAlgo
-	ConvBwdDataAlgo = MIOpen.ConvBwdDataAlgo
-	ConvBwdFilterAlgo = MIOpen.ConvBwdFilterAlgo
-
-	def wrapConvNd(data, W, bias, stride, pad, dilation, groups, algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2d(data, W, bias, stride, pad, algo=algo)
-
-	def wrapConvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2dBackwardData(grad, W, data, stride, pad, algo=algo)
-
-	def wrapConvNdBackwardParams(data, grad, W, bias, stride, pad, dilation, groups, wgrad, bgrad, scale, momentum,
-								 algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2dBackwardParams(data, grad, W, bias, stride, pad, wgrad, bgrad, scale, momentum, algo=algo)
-
-	global convNd, convNdBackwardData, convNdBackwardParams
-	convNd = wrapConvNd
-	convNdBackwardData = wrapConvNdBackwardData
-	convNdBackwardParams = wrapConvNdBackwardParams
-
-	def wrapConvNdbenchmark(datashape, Wshape, stride, pad, dilation, groups, transpose):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2dbenchmark(datashape, Wshape, stride, pad,
-									  mode=MIOpen.ConvMode.transpose if transpose else MIOpen.ConvMode.conv)
-
-	global convNdbenchmark
-	convNdbenchmark = wrapConvNdbenchmark
-
-	def wrapDeconvNd(data, W, bias, stride, pad, dilation, groups, algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2d(data, W, bias, stride, pad, mode=MIOpen.ConvMode.transpose, algo=algo)
-
-	def wrapDeconvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2dBackwardData(grad, W, data, stride, pad, mode=MIOpen.ConvMode.transpose, algo=algo)
-
-	def wrapDeconvNdBackwardParams(data, grad, W, bias, stride, pad, dilation, groups, wgrad, bgrad, scale, momentum,
-								   algo):
-		assert dilation == (1, 1) and groups == 1
-		return MIOpen.conv2dBackwardParams(data, grad, W, bias, stride, pad, wgrad, bgrad, scale, momentum,
-										   mode=MIOpen.ConvMode.transpose, algo=algo)
-
-	global deconvNd, deconvNdBackwardData, deconvNdBackwardParams
-	deconvNd = wrapDeconvNd
-	deconvNdBackwardData = wrapDeconvNdBackwardData
-	deconvNdBackwardParams = wrapDeconvNdBackwardParams
-
-	def wrapPoolNd(data, size, stride, pad, mode, test):
-		result = MIOpen.pool2d(data, size, stride, pad, mode, test)
-		return result if not test else (result, None)
-
-	global PoolMode, poolNd, poolNdBackward
-	PoolMode = MIOpen.PoolMode
-	poolNd = wrapPoolNd
-	poolNdBackward = MIOpen.pool2dBackward
-
-	def wrapBatchNormNd(data, scale, bias, mean, var, epsilon, factor, test, mode=None, out=None):
-		return MIOpen.batchNorm2d(data, scale, bias, mean, var, epsilon, factor, test, out=out)
-
-	def wrapBatchNormNdBackward(data, grad, scale, savemean, saveinvvar, epsilon, mode=None):
-		return MIOpen.batchNorm2dBackward(data, grad, scale, savemean, saveinvvar, epsilon)
-
-	global BatchNormMode, batchNormNd, batchNormNdBackward
-	BatchNormMode = MIOpen.BatchNormMode
-	batchNormNd = wrapBatchNormNd
-	batchNormNdBackward = wrapBatchNormNdBackward
-
-	global softmaxNd, softmaxNdBackward
-	softmaxNd = MIOpen.softmax2d
-	softmaxNdBackward = MIOpen.softmax2dBackward
-
-	def wrapMapLRN(data, means, N, alpha, beta, K, test):
-		assert means is None
-		result = MIOpen.lrn(data, MIOpen.LRNMode.map, N, alpha, beta, K, test)
-		return result if not test else (result, None)
-
-	def wrapMapLRNBackward(data, outdata, grad, means, workspace, N, alpha, beta, K):
-		assert means is None
-		return MIOpen.lrnBackward(data, outdata, grad, workspace, MIOpen.LRNMode.map, N, alpha, beta, K)
-
-	global mapLRN, mapLRNBackward
-	mapLRN = wrapMapLRN
-	mapLRNBackward = wrapMapLRNBackward
-
-	def wrapCrossMapLRN(data, N, alpha, beta, K, test):
-		result = MIOpen.lrn(data, MIOpen.LRNMode.cross, N, alpha, beta, K, test)
-		return result if not test else (result, None)
-
-	def wrapCrossMapLRNBackward(data, outdata, grad, workspace, N, alpha, beta, K):
-		return MIOpen.lrnBackward(data, outdata, grad, workspace, MIOpen.LRNMode.cross, N, alpha, beta, K)
-
-	global crossMapLRN, crossMapLRNBackward
-	crossMapLRN = wrapCrossMapLRN
-	crossMapLRNBackward = wrapCrossMapLRNBackward
+	return backend
 
 
 def initCPU():

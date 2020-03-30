@@ -4,25 +4,6 @@
 PyObject *CuBlas_Error = NULL;
 
 
-inline static const char *cublasGetErrorString(cublasStatus_t code)
-{
-	switch (code)
-	{
-		case CUBLAS_STATUS_SUCCESS:          return TO_STRING(CUBLAS_STATUS_SUCCESS);
-		case CUBLAS_STATUS_NOT_INITIALIZED:  return TO_STRING(CUBLAS_STATUS_NOT_INITIALIZED);
-		case CUBLAS_STATUS_ALLOC_FAILED:     return TO_STRING(CUBLAS_STATUS_ALLOC_FAILED);
-		case CUBLAS_STATUS_INVALID_VALUE:    return TO_STRING(CUBLAS_STATUS_INVALID_VALUE);
-		case CUBLAS_STATUS_ARCH_MISMATCH:    return TO_STRING(CUBLAS_STATUS_ARCH_MISMATCH);
-		case CUBLAS_STATUS_MAPPING_ERROR:    return TO_STRING(CUBLAS_STATUS_MAPPING_ERROR);
-		case CUBLAS_STATUS_EXECUTION_FAILED: return TO_STRING(CUBLAS_STATUS_EXECUTION_FAILED);
-		case CUBLAS_STATUS_INTERNAL_ERROR:   return TO_STRING(CUBLAS_STATUS_INTERNAL_ERROR);
-		case CUBLAS_STATUS_NOT_SUPPORTED:    return TO_STRING(CUBLAS_STATUS_NOT_SUPPORTED);
-		case CUBLAS_STATUS_LICENSE_ERROR:    return TO_STRING(CUBLAS_STATUS_LICENSE_ERROR);
-		default:                             assert(false); return "UNKNOWN_ERROR";
-	}
-}
-
-
 inline static bool cublasCheckStatus(cublasStatus_t code, const char *file, int line)
 {
 	if (code == CUBLAS_STATUS_SUCCESS)
@@ -117,7 +98,9 @@ static PyObject *CuBlas_Context_enableTensorOps(PyObject *self, PyObject *args)
 		return NULL;
 
 	pyctx->algo = enable ? CUBLAS_GEMM_DEFAULT_TENSOR_OP : CUBLAS_GEMM_DEFAULT;
-	Py_RETURN_NONE;
+
+	Py_INCREF(self);
+	return self;
 }
 
 

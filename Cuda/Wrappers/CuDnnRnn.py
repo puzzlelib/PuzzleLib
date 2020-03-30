@@ -1,207 +1,7 @@
-from enum import Enum
-
 import numpy as np
 
-from PuzzleLib.Cuda.Driver import CuDnn
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.Wrappers.CuDnn import context
 
-from PuzzleLib.Cuda.Utils import dtypesSupported, prod
-
-
-class RNNAlgo(Enum):
-	standard = CuDnn.RNN_ALGO_STANDARD
-	persistStatic = CuDnn.RNN_ALGO_PERSIST_STATIC
-	persistDynamic = CuDnn.RNN_ALGO_PERSIST_DYNAMIC
-
-
-class RNNMode(Enum):
-	relu = CuDnn.RNN_MODE_RELU
-	tanh = CuDnn.RNN_MODE_TANH
-	lstm = CuDnn.RNN_MODE_LSTM
-	gru = CuDnn.RNN_MODE_GRU
-
-
-class DirectionMode(Enum):
-	uni = CuDnn.RNN_DIRECTION_UNIDIRECTIONAL
-	bi = CuDnn.RNN_DIRECTION_BIDIRECTIONAL
-
-
-def createRnn(insize, hsize, dtype, layers=1, algo=RNNAlgo.standard, mode=RNNMode.lstm, direction=DirectionMode.uni,
-			  dropout=0.0, seed=0, batchsize=0):
-	rnn = CuDnn.Rnn(
-		context, insize, hsize, np.dtype(dtype), layers, algo.value, mode.value, direction.value,
-		dropout, seed, batchsize
-	)
-
-	W = GPUArray.empty((rnn.wsize, ), dtype=dtype)
-	params = acquireRnnParams(rnn, W)
-
-	return rnn, W, params
-
-
-def acquireRnnParams(rnn, W):
-	mode = RNNMode(rnn.mode)
-
-	if mode == RNNMode.relu or mode == RNNMode.tanh:
-		return acquireNativeRnnParams(rnn, W)
-	elif mode == RNNMode.lstm:
-		return acquireLSTMParams(rnn, W)
-	elif mode == RNNMode.gru:
-		return acquireGRUParams(rnn, W)
-	else:
-		raise NotImplementedError(mode.value)
-
-
-def getRnnParam(rnn, W, layer, linLayer, Wshape):
-	Wtuple, biasTuple = rnn.getParam(W, layer, linLayer)
-
-	Woffset, wsize = Wtuple
-	biasOffset, biasSize = biasTuple
-
-	dtype, gpudata = W.dtype, W.gpudata
-	Wbytes, biasBytes = wsize * dtype.itemsize, biasSize * dtype.itemsize
-
-	assert prod(Wshape) == wsize
-	w = GPUArray(Wshape, dtype=W.dtype, gpudata=W.gpudata[Woffset:Woffset + Wbytes])
-
-	bias = GPUArray((biasSize, ), dtype=W.dtype, gpudata=W.gpudata[biasOffset:biasOffset + biasBytes])
-	return w, bias
-
-
-def acquireNativeRnnParams(rnn, W):
-	direction = DirectionMode(rnn.direction)
-
-	linLayers = 2
-	layers = rnn.layers if direction == DirectionMode.uni else rnn.layers * 2
-
-	layerTypes = {0: "w", 1: "r"}
-
-	params = []
-	for layer in range(layers):
-		layerparams = {}
-		for linLayer in range(linLayers):
-			if linLayer == 0:
-				if layer == 0 or layer == 1 and direction == DirectionMode.bi:
-					size = rnn.insize
-				else:
-					size = 2 * rnn.hsize if direction == DirectionMode.bi else rnn.hsize
-
-				shape = (rnn.hsize, size)
-
-			elif linLayer == 1:
-				shape = (rnn.hsize, rnn.hsize)
-
-			else:
-				assert False
-
-			w, bias = getRnnParam(rnn, W, layer, linLayer, shape)
-			T = layerTypes[linLayer]
-
-			Wname = "%si" % T
-			assert Wname not in layerparams
-
-			biasname = "b%si" % T
-			assert biasname not in layerparams
-
-			layerparams[Wname] = w
-			layerparams[biasname] = bias
-
-		params.append(layerparams)
-
-	return params
-
-
-def acquireLSTMParams(rnn, W):
-	direction = DirectionMode(rnn.direction)
-
-	linLayers = 8
-	layers = rnn.layers if direction == DirectionMode.uni else rnn.layers * 2
-
-	layerTypes = {
-		0: "i", 4: "i",
-		1: "f", 5: "f",
-		2: "c", 6: "c",
-		3: "o", 7: "o"
-	}
-
-	params = []
-	for layer in range(layers):
-		layerparams = {}
-		for linLayer in range(linLayers):
-			if linLayer < 4:
-				if layer == 0 or layer == 1 and direction == DirectionMode.bi:
-					size = rnn.insize
-				else:
-					size = 2 * rnn.hsize if direction == DirectionMode.bi else rnn.hsize
-
-				shape, wtype = (rnn.hsize, size), "w"
-
-			else:
-				shape, wtype = (rnn.hsize, rnn.hsize), "r"
-
-			w, bias = getRnnParam(rnn, W, layer, linLayer, shape)
-			T = layerTypes[linLayer]
-
-			Wname = "%s%s" % (wtype, T)
-			assert Wname not in layerparams
-
-			biasname = "b%s%s" % (wtype, T)
-			assert biasname not in layerparams
-
-			layerparams[Wname] = w
-			layerparams[biasname] = bias
-
-		params.append(layerparams)
-
-	return params
-
-
-def acquireGRUParams(rnn, W):
-	direction = DirectionMode(rnn.direction)
-
-	linLayers = 6
-	layers = rnn.layers if direction == DirectionMode.uni else rnn.layers * 2
-
-	layerTypes = {
-		0: "r", 3: "r",
-		1: "i", 4: "i",
-		2: "h", 5: "h"
-	}
-
-	params = []
-	for layer in range(layers):
-		layerparams = {}
-		for linLayer in range(linLayers):
-			if linLayer < 3:
-				if layer == 0 or layer == 1 and direction == DirectionMode.bi:
-					size = rnn.insize
-				else:
-					size = 2 * rnn.hsize if direction == DirectionMode.bi else rnn.hsize
-
-				shape, wtype = (rnn.hsize, size), "w"
-
-			else:
-				shape, wtype = (rnn.hsize, rnn.hsize), "r"
-
-			w, bias = getRnnParam(rnn, W, layer, linLayer, shape)
-			T = layerTypes[linLayer]
-
-			Wname = "%s%s" % (wtype, T)
-			assert Wname not in layerparams
-
-			biasname = "b%s%s" % (wtype, T)
-			assert biasname not in layerparams
-
-			layerparams[Wname] = w
-			layerparams[biasname] = bias
-
-		params.append(layerparams)
-
-	return params
-
-
-def randomWInit(params):
+def randomWInit(bnd, rnn, W, params):
 	hostParams = []
 
 	for layer in params:
@@ -215,27 +15,36 @@ def randomWInit(params):
 
 		hostParams.append(layerParams)
 
+	bnd.updateRnnParams(rnn, W, params)
 	return hostParams
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
-		reluTest(dtype, atol)
-		tanhTest(dtype, atol)
-		lstmTest(dtype, atol)
-		gruTest(dtype, atol)
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def reluTest(dtype, atol):
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		bnd = Backend.getBackend(deviceIdx, initmode=2)
+
+		for dtype, atol in bnd.dtypesSupported():
+			reluTest(bnd, dtype, atol)
+			tanhTest(bnd, dtype, atol)
+			lstmTest(bnd, dtype, atol)
+			gruTest(bnd, dtype, atol)
+
+
+def reluTest(bnd, dtype, atol):
 	seqlen, batchsize, insize, hsize = 2, 3, 4, 5
-	rnn, W, params = createRnn(insize, hsize, dtype, mode=RNNMode.relu)
+	rnn, W, params = bnd.createRnn(insize, hsize, dtype, mode=bnd.RNNMode.relu)
 
-	hostParams = randomWInit(params)[0]
+	hostParams = randomWInit(bnd, rnn, W, params)[0]
 
 	hostData = np.random.randn(seqlen, batchsize, insize).astype(dtype)
 	hostHidden = np.random.randn(1, batchsize, hsize).astype(dtype)
 
-	data, inithidden = GPUArray.toGpu(hostData), GPUArray.toGpu(hostHidden)
+	data, inithidden = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostHidden)
 	outdata, trainReserve = rnn.forward(data, W, hidden=inithidden)
 
 	hostOutData = np.zeros((seqlen + 1, batchsize, hsize), dtype=dtype)
@@ -250,7 +59,7 @@ def reluTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
+	grad = bnd.GPUArray.toGpu(hostGrad)
 	ingrad, dhx, _ = rnn.backwardData(grad, outdata, W, trainReserve, hidden=inithidden)
 
 	hostAccGrad = np.zeros((seqlen + 1, batchsize, hsize), dtype=dtype)
@@ -266,7 +75,7 @@ def reluTest(dtype, atol):
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
 	dw = rnn.backwardParams(data, outdata, trainReserve, hidden=inithidden)
-	dwparams = acquireRnnParams(rnn, W=dw)
+	dwparams = bnd.acquireRnnParams(rnn, W=dw)
 
 	hostRiGrad = np.zeros(hostParams["ri"].shape, dtype=dtype)
 	hostWiGrad = np.zeros(hostParams["wi"].shape, dtype=dtype)
@@ -286,14 +95,14 @@ def reluTest(dtype, atol):
 	assert np.allclose(hostDhx, dhx.get(), atol=atol)
 
 
-def tanhTest(dtype, atol):
+def tanhTest(bnd, dtype, atol):
 	seqlen, batchsize, insize, hsize = 3, 3, 3, 2
-	rnn, W, params = createRnn(insize, hsize, dtype, mode=RNNMode.tanh, direction=DirectionMode.bi)
+	rnn, W, params = bnd.createRnn(insize, hsize, dtype, mode=bnd.RNNMode.tanh, direction=bnd.DirectionMode.bi)
 
-	hostParams = randomWInit(params)
+	hostParams = randomWInit(bnd, rnn, W, params)
 	hostData = np.random.randn(seqlen, batchsize, insize).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
+	data = bnd.GPUArray.toGpu(hostData)
 	outdata, trainReserve = rnn.forward(data, W)
 
 	hostOutData = np.zeros((seqlen + 2, batchsize, 2 * hsize), dtype=dtype)
@@ -312,7 +121,7 @@ def tanhTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
+	grad = bnd.GPUArray.toGpu(hostGrad)
 	ingrad, _, _ = rnn.backwardData(grad, outdata, W, trainReserve)
 
 	hostAccGrad = np.zeros((seqlen + 2, batchsize, 2 * hsize), dtype=dtype)
@@ -335,7 +144,7 @@ def tanhTest(dtype, atol):
 	assert np.allclose(hostInGrad, ingrad.get(), atol=atol)
 
 	dw = rnn.backwardParams(data, outdata, trainReserve)
-	dwparams = acquireRnnParams(rnn, W=dw)
+	dwparams = bnd.acquireRnnParams(rnn, W=dw)
 
 	hostRi0Grad = np.zeros(hostParams[0]["ri"].shape, dtype=dtype)
 	hostRi1Grad = np.zeros(hostParams[1]["ri"].shape, dtype=dtype)
@@ -366,18 +175,18 @@ def tanhTest(dtype, atol):
 	assert np.allclose(hostBi1Grad, dwparams[1]["bri"].get(), atol=atol)
 
 
-def lstmTest(dtype, atol):
+def lstmTest(bnd, dtype, atol):
 	seqlen, batchsize, insize, hsize = 4, 2, 4, 2
-	rnn, W, params = createRnn(insize, hsize, dtype, mode=RNNMode.lstm)
+	rnn, W, params = bnd.createRnn(insize, hsize, dtype, mode=bnd.RNNMode.lstm)
 
-	hostParams = randomWInit(params)[0]
+	hostParams = randomWInit(bnd, rnn, W, params)[0]
 
 	hostData = np.random.randn(seqlen, batchsize, insize).astype(dtype)
 	hostInitHidden = np.random.randn(1, batchsize, hsize).astype(dtype)
 	hostInitCells = np.ones((1, batchsize, hsize), dtype=dtype)
 
-	data = GPUArray.toGpu(hostData)
-	inithidden, initcells = GPUArray.toGpu(hostInitHidden), GPUArray.toGpu(hostInitCells)
+	data = bnd.GPUArray.toGpu(hostData)
+	inithidden, initcells = bnd.GPUArray.toGpu(hostInitHidden), bnd.GPUArray.toGpu(hostInitCells)
 
 	outdata, trainReserve = rnn.forward(data, W, hidden=inithidden, cells=initcells)
 
@@ -425,11 +234,11 @@ def lstmTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
+	grad = bnd.GPUArray.toGpu(hostGrad)
 	ingrad, dhx, dcx = rnn.backwardData(grad, outdata, W, trainReserve, hidden=inithidden, cells=initcells)
 
 	dw = rnn.backwardParams(data, outdata, trainReserve, hidden=inithidden)
-	dwparams = acquireRnnParams(rnn, W=dw)
+	dwparams = bnd.acquireRnnParams(rnn, W=dw)
 
 	dwparams = dwparams[0]
 	hostDw = np.zeros(hostW.shape, dtype=dtype)
@@ -491,16 +300,16 @@ def lstmTest(dtype, atol):
 	assert np.allclose(hostDb[3 * hsize:], dwparams["bro"].get(), atol=atol)
 
 
-def gruTest(dtype, atol):
+def gruTest(bnd, dtype, atol):
 	seqlen, batchsize, insize, hsize = 3, 3, 4, 2
-	rnn, W, params = createRnn(insize, hsize, dtype, mode=RNNMode.gru)
+	rnn, W, params = bnd.createRnn(insize, hsize, dtype, mode=bnd.RNNMode.gru)
 
-	hostParams = randomWInit(params)[0]
+	hostParams = randomWInit(bnd, rnn, W, params)[0]
 
 	hostData = np.random.randn(seqlen, batchsize, insize).astype(dtype)
 	hostInitHidden = np.random.randn(1, batchsize, hsize).astype(dtype)
 
-	data, inithidden = GPUArray.toGpu(hostData), GPUArray.toGpu(hostInitHidden)
+	data, inithidden = bnd.GPUArray.toGpu(hostData), bnd.GPUArray.toGpu(hostInitHidden)
 	outdata, trainReserve = rnn.forward(data, W, hidden=inithidden)
 
 	hostOutData = np.zeros((seqlen + 1, batchsize, hsize), dtype=dtype)
@@ -542,11 +351,11 @@ def gruTest(dtype, atol):
 
 	hostGrad = np.random.randn(*outdata.shape).astype(dtype)
 
-	grad = GPUArray.toGpu(hostGrad)
+	grad = bnd.GPUArray.toGpu(hostGrad)
 	ingrad, dhx, _ = rnn.backwardData(grad, outdata, W, trainReserve, hidden=inithidden)
 
 	dw = rnn.backwardParams(data, outdata, trainReserve, hidden=inithidden)
-	dwparams = acquireRnnParams(rnn, W=dw)
+	dwparams = bnd.acquireRnnParams(rnn, W=dw)
 
 	dwparams = dwparams[0]
 	hostDw = np.zeros(hostW.shape, dtype=dtype)

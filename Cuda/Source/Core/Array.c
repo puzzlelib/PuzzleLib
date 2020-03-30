@@ -358,7 +358,7 @@ static void Cuda_GPUArray_dealloc(PyObject *self)
 #endif
 
 	Py_DECREF(pyary->gpudata);
-	PyObject_FREE(self);
+	PyObject_Del(self);
 }
 
 

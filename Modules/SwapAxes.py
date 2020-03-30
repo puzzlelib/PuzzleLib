@@ -45,11 +45,9 @@ class SwapAxes(Module):
 
 
 	def calcMode(self, T):
-		if Config.backend == Config.Backend.cuda:
-			if T not in {np.float16, np.float32}:
-				raise ModuleError("Unsupported dtype %s" % T)
+		dtypes = {dtype for dtype, _ in dtypesSupported()}
 
-		elif T != np.float32:
+		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
 
 		self.calctype = T

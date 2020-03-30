@@ -25,15 +25,15 @@ class InitScheme(str, Enum):
 	uniform = "uniform"
 
 
-class MemoryUnit(str, Enum):
-	mb = "mb"
-	kb = "kb"
-
-
 class FactorType(str, Enum):
 	in_ = "in"
 	out = "out"
 	avg = "avg"
+
+
+class MemoryUnit(str, Enum):
+	mb = "mb"
+	kb = "kb"
 
 
 class Module:
@@ -406,69 +406,43 @@ class Module:
 		return [cls.acquireDtypesFrom(d) for d in data] if isinstance(data, (tuple, list)) else data.dtype
 
 
-	@classmethod
-	def calcNeuronsNumber(cls, shape, transpose=False):
-		dims = len(shape)
-
-		if dims == 1:
-			return shape[0], shape[0]
-		elif dims == 2:
-			neuronsIn = shape[0]
-			neuronsOut = shape[1]
-		else:
-			inmaps = shape[1]
-			outmaps = shape[0]
-
-			receptiveFieldSize = np.prod(shape[2:])
-
-			neuronsIn = inmaps * receptiveFieldSize
-			neuronsOut = outmaps * receptiveFieldSize
-
-		if transpose:
-			neuronsIn, neuronsOut = neuronsOut, neuronsIn
-
-		return neuronsIn, neuronsOut
-
-
 	@staticmethod
-	def createTensorWithScheme(scheme, shape, wscale, neurons, dtype=np.float32):
-		neuronsIn, neuronsOut = neurons
-
+	def createTensorWithScheme(scheme, shape, wscale, factorShape=None, factorTranspose=False, dtype=np.float32):
 		factorType = FactorType.in_
+
 		if isinstance(scheme, (tuple, list)):
-			if not len(scheme) == 2:
-				raise ValueError("Scheme tuple has {} length, expected 2".format(len(scheme)))
+			if len(scheme) != 2:
+				raise ValueError("Scheme tuple has %s length, expected 2" % len(scheme))
 
 			scheme, factorType = scheme
 
 		scheme = InitScheme(scheme) if scheme is not None else scheme
+		factorType = FactorType(factorType)
+
+		outs, ins = Module.inferNeuronsNumber(shape if factorShape is None else factorShape, factorTranspose)
 
 		if factorType == FactorType.avg:
-			factor = neuronsOut + neuronsIn / 2
+			factor = (outs + ins) / 2
 		elif factorType == FactorType.in_:
-			factor = neuronsIn
+			factor = ins
 		elif factorType == FactorType.out:
-			factor = neuronsOut
+			factor = outs
 		else:
-			raise TypeError("Bad factor type")
+			raise NotImplementedError(factorType.value)
 
 		if scheme == InitScheme.none:
 			return None
 
-		elif scheme is None:
-			nwscale = wscale / math.sqrt(factor)
-			return np.random.uniform(-nwscale, nwscale, shape).astype(dtype)
-
-		elif scheme == InitScheme.xavierUniform:
+		elif scheme == InitScheme.xavierUniform or scheme is None:
 			nwscale = math.sqrt(3.0 / factor)
 			return np.random.uniform(-nwscale, nwscale, shape).astype(dtype)
 
 		elif scheme == InitScheme.xavierNormal or scheme == InitScheme.xavier:
-			nwscale = math.sqrt(3.0 / factor)
+			nwscale = math.sqrt(1.0 / factor)
 			return np.random.normal(0, nwscale, shape).astype(dtype)
 
 		elif scheme == InitScheme.he:
-			nwscale = wscale * math.sqrt(2.0 / factor)
+			nwscale = math.sqrt(2.0 / factor)
 			return np.random.normal(0.0, nwscale, shape).astype(dtype)
 
 		elif scheme == InitScheme.gaussian:
@@ -478,7 +452,26 @@ class Module:
 			return np.random.uniform(-wscale, wscale, shape).astype(dtype)
 
 		else:
-			raise NotImplementedError(scheme)
+			raise NotImplementedError(scheme.value)
+
+
+	@staticmethod
+	def inferNeuronsNumber(shape, transpose):
+		ndim = len(shape)
+
+		if ndim == 1:
+			return shape[0], shape[0]
+
+		elif ndim == 2:
+			neuronsIn, neuronsOut = shape
+
+		else:
+			outmaps, inmaps = shape[:2]
+			receptiveFieldSize = int(np.prod(shape[2:]))
+
+			neuronsOut, neuronsIn = outmaps * receptiveFieldSize, inmaps * receptiveFieldSize
+
+		return (neuronsIn, neuronsOut) if transpose else (neuronsOut, neuronsIn)
 
 
 def unittest():

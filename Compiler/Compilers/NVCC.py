@@ -1,6 +1,7 @@
 import sys
 
 from PuzzleLib.Compiler.Compilers.GCC import GCCLike
+from PuzzleLib.Compiler.Compilers.MSVC import MSVC
 
 
 class NVCC(GCCLike):
@@ -9,13 +10,7 @@ class NVCC(GCCLike):
 
 	def __init__(self, verbose=0, forPython=False):
 		super().__init__(verbose)
-
-		if sys.platform == "win32":
-			from PuzzleLib.Compiler.Compilers.MSVC import MSVC
-			cflags = MSVC.cflags
-
-		else:
-			cflags = self.cflags
+		cflags = MSVC.cflags if sys.platform == "win32" else self.cflags
 
 		self.cflags = [flag for cflag in cflags for flag in ["-Xcompiler", cflag]]
 		self.cpp = True

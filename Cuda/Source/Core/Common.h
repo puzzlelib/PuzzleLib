@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <assert.h>
 
+#define TO_STRING(s) #s
+
 
 #if defined(__clang__)
 	#pragma GCC diagnostic push
@@ -11,32 +13,80 @@
 
 #elif defined(_MSC_VER)
 	#pragma warning(push)
-	#pragma warning(disable: 4115)
-	#pragma warning(disable: 4201)
-	#pragma warning(disable: 4505)
+	#pragma warning(disable: 4115 4201 4505)
 
 #endif
 
 #include <Python.h>
 #include <structmember.h>
 
-#undef __cdecl
+#if defined(__HIP_PLATFORM_HCC__)
+	#include "HipDefines.h"
 
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <nvrtc.h>
+	#define CUDA_BACKEND_IS_HIP
+	#define CUDA_BACKEND_NAME "Hip"
+	#define CURAND_BACKEND_NAME "HipRand"
+	#define CUBLAS_BACKEND_NAME "RocBlas"
 
-#include <curand.h>
-#include <cublas_v2.h>
-#include <cudnn.h>
+#else
+	#undef __cdecl
 
-#include <cuda_profiler_api.h>
+	#include <cuda.h>
+	#include <cuda_runtime.h>
+	#include <nvrtc.h>
 
-#define CUDA_BACKEND_IS_CUDA
-#define CUDA_BACKEND_NAME "Cuda"
-#define CURAND_BACKEND_NAME "CuRand"
-#define CUBLAS_BACKEND_NAME "CuBlas"
-#define CUDNN_BACKEND_NAME "CuDnn"
+	#include <curand.h>
+	#include <cublas_v2.h>
+	#include <cudnn.h>
+
+	#include <cuda_profiler_api.h>
+
+	#define CUDA_BACKEND_IS_CUDA
+	#define CUDA_BACKEND_NAME "Cuda"
+	#define CURAND_BACKEND_NAME "CuRand"
+	#define CUBLAS_BACKEND_NAME "CuBlas"
+	#define CUDNN_BACKEND_NAME "CuDnn"
+
+inline static const char *curandGetErrorString(curandStatus_t code)
+{
+	switch (code)
+	{
+		case CURAND_STATUS_SUCCESS:                   return TO_STRING(CURAND_STATUS_SUCCESS);
+		case CURAND_STATUS_VERSION_MISMATCH:          return TO_STRING(CURAND_STATUS_VERSION_MISMATCH);
+		case CURAND_STATUS_NOT_INITIALIZED:           return TO_STRING(CURAND_STATUS_NOT_INITIALIZED);
+		case CURAND_STATUS_ALLOCATION_FAILED:         return TO_STRING(CURAND_STATUS_ALLOCATION_FAILED);
+		case CURAND_STATUS_TYPE_ERROR:                return TO_STRING(CURAND_STATUS_TYPE_ERROR);
+		case CURAND_STATUS_OUT_OF_RANGE:              return TO_STRING(CURAND_STATUS_OUT_OF_RANGE);
+		case CURAND_STATUS_LENGTH_NOT_MULTIPLE:       return TO_STRING(CURAND_STATUS_LENGTH_NOT_MULTIPLE);
+		case CURAND_STATUS_DOUBLE_PRECISION_REQUIRED: return TO_STRING(CURAND_STATUS_DOUBLE_PRECISION_REQUIRED);
+		case CURAND_STATUS_LAUNCH_FAILURE:            return TO_STRING(CURAND_STATUS_LAUNCH_FAILURE);
+		case CURAND_STATUS_PREEXISTING_FAILURE:       return TO_STRING(CURAND_STATUS_PREEXISTING_FAILURE);
+		case CURAND_STATUS_INITIALIZATION_FAILED:     return TO_STRING(CURAND_STATUS_INITIALIZATION_FAILED);
+		case CURAND_STATUS_ARCH_MISMATCH:             return TO_STRING(CURAND_STATUS_ARCH_MISMATCH);
+		case CURAND_STATUS_INTERNAL_ERROR:            return TO_STRING(CURAND_STATUS_INTERNAL_ERROR);
+		default:                                      assert(false); return "UNKNOWN_ERROR";
+	}
+}
+
+inline static const char *cublasGetErrorString(cublasStatus_t code)
+{
+	switch (code)
+	{
+		case CUBLAS_STATUS_SUCCESS:          return TO_STRING(CUBLAS_STATUS_SUCCESS);
+		case CUBLAS_STATUS_NOT_INITIALIZED:  return TO_STRING(CUBLAS_STATUS_NOT_INITIALIZED);
+		case CUBLAS_STATUS_ALLOC_FAILED:     return TO_STRING(CUBLAS_STATUS_ALLOC_FAILED);
+		case CUBLAS_STATUS_INVALID_VALUE:    return TO_STRING(CUBLAS_STATUS_INVALID_VALUE);
+		case CUBLAS_STATUS_ARCH_MISMATCH:    return TO_STRING(CUBLAS_STATUS_ARCH_MISMATCH);
+		case CUBLAS_STATUS_MAPPING_ERROR:    return TO_STRING(CUBLAS_STATUS_MAPPING_ERROR);
+		case CUBLAS_STATUS_EXECUTION_FAILED: return TO_STRING(CUBLAS_STATUS_EXECUTION_FAILED);
+		case CUBLAS_STATUS_INTERNAL_ERROR:   return TO_STRING(CUBLAS_STATUS_INTERNAL_ERROR);
+		case CUBLAS_STATUS_NOT_SUPPORTED:    return TO_STRING(CUBLAS_STATUS_NOT_SUPPORTED);
+		case CUBLAS_STATUS_LICENSE_ERROR:    return TO_STRING(CUBLAS_STATUS_LICENSE_ERROR);
+		default:                             assert(false); return "UNKNOWN_ERROR";
+	}
+}
+
+#endif
 
 #if defined(__clang__)
 	#pragma GCC diagnostic pop

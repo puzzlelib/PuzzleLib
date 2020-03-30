@@ -3,10 +3,7 @@ from string import Template
 import numpy as np
 
 from PuzzleLib.Compiler.Codegen.Types import half_t, float_t
-
-from PuzzleLib.Cuda.GPUArray import GPUArray
-from PuzzleLib.Cuda.SourceModule import SourceModule
-from PuzzleLib.Cuda.Utils import dtypesSupported, device, warpSize, roundUpDiv, memoryPool as memPool
+from PuzzleLib.Cuda.Utils import roundUpDiv
 
 
 mapTmpl = """
@@ -144,103 +141,115 @@ __global__ void reflectpad2dBackward$ext($T *ingrad, const $T *outgrad, int inh,
 """)
 
 
-if device is not None:
-	mod = SourceModule("%s%s%s" % (
-		mapTmpl, padTmpl.substitute(T=half_t, ext="FP16"), padTmpl.substitute(T=float_t, ext="")
-	))
+class PadModule:
+	def __init__(self, backend):
+		self.backend = backend
+		self.GPUArray, self.warpSize = backend.GPUArray, backend.warpSize
+
+		self.mod = backend.SourceModule("%s%s%s" % (
+			mapTmpl, padTmpl.substitute(T=half_t, ext="FP16"), padTmpl.substitute(T=float_t, ext="")
+		))
 
 
-def reflectpad(data, pad, allocator=memPool):
-	if data.ndim == 3:
-		batchsize, maps, insize = data.shape
-		lpad, rpad = pad
+	def reflectpad(self, data, pad, allocator=None):
+		if data.ndim == 3:
+			batchsize, maps, insize = data.shape
+			lpad, rpad = pad
 
-		assert insize >= max(lpad, rpad) + 1
-		outsize = insize + lpad + rpad
+			assert insize >= max(lpad, rpad) + 1
+			outsize = insize + lpad + rpad
 
-		block = (warpSize, 1, 1)
-		grid = (roundUpDiv(outsize, warpSize), maps, batchsize)
+			block = (self.warpSize, 1, 1)
+			grid = (roundUpDiv(outsize, self.warpSize), maps, batchsize)
 
-		outdata = GPUArray.empty((batchsize, maps, outsize), dtype=data.dtype, allocator=allocator)
-		fn = mod.reflectpad1d if data.dtype == np.float32 else mod.reflectpad1dFP16
+			outdata = self.GPUArray.empty((batchsize, maps, outsize), dtype=data.dtype, allocator=allocator)
+			fn = self.mod.reflectpad1d if data.dtype == np.float32 else self.mod.reflectpad1dFP16
 
-		fn(outdata, data, np.int32(insize), np.int32(lpad), np.int32(rpad), block=block, grid=grid)
+			fn(outdata, data, np.int32(insize), np.int32(lpad), np.int32(rpad), block=block, grid=grid)
 
-	elif data.ndim == 4:
-		batchsize, maps, inh, inw = data.shape
-		upad, bpad, lpad, rpad = pad
+		elif data.ndim == 4:
+			batchsize, maps, inh, inw = data.shape
+			upad, bpad, lpad, rpad = pad
 
-		assert inh >= max(upad, bpad) + 1 and inw >= max(lpad, rpad) + 1
-		outh, outw = inh + upad + bpad, inw + lpad + rpad
+			assert inh >= max(upad, bpad) + 1 and inw >= max(lpad, rpad) + 1
+			outh, outw = inh + upad + bpad, inw + lpad + rpad
 
-		block = (warpSize, 1, 1)
-		grid = (roundUpDiv(outh * outw, warpSize), maps, batchsize)
+			block = (self.warpSize, 1, 1)
+			grid = (roundUpDiv(outh * outw, self.warpSize), maps, batchsize)
 
-		outdata = GPUArray.empty((batchsize, maps, outh, outw), dtype=data.dtype, allocator=allocator)
-		fn = mod.reflectpad2d if data.dtype == np.float32 else mod.reflectpad2dFP16
+			outdata = self.GPUArray.empty((batchsize, maps, outh, outw), dtype=data.dtype, allocator=allocator)
+			fn = self.mod.reflectpad2d if data.dtype == np.float32 else self.mod.reflectpad2dFP16
 
-		fn(
-			outdata, data, np.int32(inh), np.int32(inw), np.int32(upad), np.int32(bpad), np.int32(lpad), np.int32(rpad),
-			block=block, grid=grid
-		)
+			fn(
+				outdata, data, np.int32(inh), np.int32(inw),
+				np.int32(upad), np.int32(bpad), np.int32(lpad), np.int32(rpad), block=block, grid=grid
+			)
 
-	else:
-		raise NotImplementedError(data.ndim)
+		else:
+			raise NotImplementedError(data.ndim)
 
-	return outdata
+		return outdata
 
 
-def reflectpadBackward(grad, pad, allocator=memPool):
-	if grad.ndim == 3:
-		batchsize, maps, outsize = grad.shape
-		lpad, rpad = pad
+	def reflectpadBackward(self, grad, pad, allocator=None):
+		if grad.ndim == 3:
+			batchsize, maps, outsize = grad.shape
+			lpad, rpad = pad
 
-		block = (warpSize, 1, 1)
-		grid = (roundUpDiv(outsize, warpSize), maps, batchsize)
+			block = (self.warpSize, 1, 1)
+			grid = (roundUpDiv(outsize, self.warpSize), maps, batchsize)
 
-		insize = outsize - lpad - rpad
-		ingrad = GPUArray.zeros((batchsize, maps, insize), dtype=grad.dtype, allocator=allocator)
-		fn = mod.reflectpad1dBackward if grad.dtype == np.float32 else mod.reflectpad1dBackwardFP16
+			insize = outsize - lpad - rpad
+			ingrad = self.GPUArray.zeros((batchsize, maps, insize), dtype=grad.dtype, allocator=allocator)
+			fn = self.mod.reflectpad1dBackward if grad.dtype == np.float32 else self.mod.reflectpad1dBackwardFP16
 
-		fn(ingrad, grad, np.int32(insize), np.int32(lpad), np.int32(rpad), block=block, grid=grid)
+			fn(ingrad, grad, np.int32(insize), np.int32(lpad), np.int32(rpad), block=block, grid=grid)
 
-	elif grad.ndim == 4:
-		batchsize, maps, outh, outw = grad.shape
-		upad, bpad, lpad, rpad = pad
+		elif grad.ndim == 4:
+			batchsize, maps, outh, outw = grad.shape
+			upad, bpad, lpad, rpad = pad
 
-		inh, inw = outh - upad - bpad, outw - lpad - rpad
+			inh, inw = outh - upad - bpad, outw - lpad - rpad
 
-		block = (warpSize, 1, 1)
-		grid = (roundUpDiv(outh * outw, warpSize), maps, batchsize)
+			block = (self.warpSize, 1, 1)
+			grid = (roundUpDiv(outh * outw, self.warpSize), maps, batchsize)
 
-		ingrad = GPUArray.zeros((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
-		fn = mod.reflectpad2dBackward if grad.dtype == np.float32 else mod.reflectpad2dBackwardFP16
+			ingrad = self.GPUArray.zeros((batchsize, maps, inh, inw), dtype=grad.dtype, allocator=allocator)
+			fn = self.mod.reflectpad2dBackward if grad.dtype == np.float32 else self.mod.reflectpad2dBackwardFP16
 
-		fn(
-			ingrad, grad, np.int32(inh), np.int32(inw), np.int32(upad), np.int32(bpad), np.int32(lpad), np.int32(rpad),
-			block=block, grid=grid
-		)
+			fn(
+				ingrad, grad, np.int32(inh), np.int32(inw),
+				np.int32(upad), np.int32(bpad), np.int32(lpad), np.int32(rpad), block=block, grid=grid
+			)
 
-	else:
-		raise NotImplementedError(grad.ndim)
+		else:
+			raise NotImplementedError(grad.ndim)
 
-	return ingrad
+		return ingrad
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
-		reflectpad1dTest(dtype)
-		reflectpad2dTest(dtype)
+	from PuzzleLib.Cuda import Backend
+	backendTest(Backend)
 
 
-def reflectpad1dTest(dtype):
+def backendTest(Backend):
+	for deviceIdx in range(Backend.getDeviceCount()):
+		module = PadModule(Backend.getBackend(deviceIdx))
+
+		for dtype, _ in module.backend.dtypesSupported():
+			reflectpad1dTest(module, dtype)
+			reflectpad2dTest(module, dtype)
+
+
+def reflectpad1dTest(module, dtype):
 	batchsize, maps, insize = 4, 8, 48
 	lpad, rpad = 2, 3
 
 	hostData = np.random.randn(batchsize, maps, insize).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = reflectpad(data, pad=(lpad, rpad))
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.reflectpad(data, pad=(lpad, rpad))
 
 	hostOutData = outdata.get()
 	outsize = hostOutData.shape[2]
@@ -251,8 +260,8 @@ def reflectpad1dTest(dtype):
 
 	hostGrad = np.random.randn(batchsize, maps, outsize).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = reflectpadBackward(grad, pad=(lpad, rpad))
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.reflectpadBackward(grad, pad=(lpad, rpad))
 
 	hostInGrad = ingrad.get()
 
@@ -268,14 +277,14 @@ def reflectpad1dTest(dtype):
 	)
 
 
-def reflectpad2dTest(dtype):
+def reflectpad2dTest(module, dtype):
 	batchsize, maps, inh, inw = 4, 8, 12, 15
 	upad, bpad, lpad, rpad = 2, 3, 2, 3
 
 	hostData = np.random.randn(batchsize, maps, inh, inw).astype(dtype)
 
-	data = GPUArray.toGpu(hostData)
-	outdata = reflectpad(data, pad=(upad, bpad, lpad, rpad))
+	data = module.GPUArray.toGpu(hostData)
+	outdata = module.reflectpad(data, pad=(upad, bpad, lpad, rpad))
 
 	hostOutData = outdata.get()
 	outh, outw = hostOutData.shape[2:]
@@ -289,8 +298,8 @@ def reflectpad2dTest(dtype):
 
 	hostGrad = np.random.randn(batchsize, maps, outh, outw).astype(np.float32)
 
-	grad = GPUArray.toGpu(hostGrad)
-	ingrad = reflectpadBackward(grad, pad=(upad, bpad, lpad, rpad))
+	grad = module.GPUArray.toGpu(hostGrad)
+	ingrad = module.reflectpadBackward(grad, pad=(upad, bpad, lpad, rpad))
 
 	hostInGrad = ingrad.get()
 

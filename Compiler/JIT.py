@@ -1,6 +1,9 @@
-import sys, os, hashlib, tempfile
+import sys, os, time, hashlib, tempfile
 
 from PuzzleLib.Compiler.Toolchain import guessToolchain, loadDynamicModule
+
+
+stdCachePath = "PuzzleLib"
 
 
 class JITError(Exception):
@@ -89,19 +92,30 @@ def computeHash(*lines):
 
 
 class FileLock:
-	def __init__(self, dirpath):
+	def __init__(self, dirpath, timeout=10.0):
 		self.lockfile = os.path.join(dirpath, "lock")
 
 		self.dirpath = dirpath
 		self.fd = None
 
+		self.timeout = timeout
+
 
 	def __enter__(self):
-		try:
-			fd = os.open(self.lockfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC)
+		dt, checkpoint = 0.0, time.time()
 
-		except (IOError, OSError):
-			raise JITError("Could not lock directory '%s'" % self.dirpath)
+		while True:
+			try:
+				fd = os.open(self.lockfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_TRUNC)
+				break
+
+			except (IOError, OSError):
+				tm = time.time()
+				dt += tm - checkpoint
+				checkpoint = tm
+
+				if dt >= self.timeout:
+					raise JITError("Could not lock directory '%s' (timeout is %s secs)" % (self.dirpath, self.timeout))
 
 		self.fd = fd
 
@@ -155,7 +169,7 @@ PyMODINIT_FUNC PyInit_test(void)
 """
 
 	test = extensionFromString(
-		toolchain, name="test", string=src, cachepath=os.path.join("PuzzleLib", "tests"), cleanup=True, recompile=True
+		toolchain, name="test", string=src, cachepath=os.path.join(stdCachePath, "tests"), cleanup=True, recompile=True
 	)
 	test.hello()
 

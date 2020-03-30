@@ -7,10 +7,13 @@ mulTensorBatch = None
 
 
 def autoinit():
+	if not Config.shouldInit():
+		return
+
 	if Config.backend == Config.Backend.cuda:
 		initCuda()
-	elif Config.backend == Config.Backend.opencl:
-		initOpenCL()
+	elif Config.backend == Config.Backend.hip:
+		initHip()
 	elif Config.isCPUBased(Config.backend):
 		initCPU()
 	else:
@@ -18,47 +21,45 @@ def autoinit():
 
 
 def initCuda():
-	from PuzzleLib.Cuda.Utils import memoryPool
+	from PuzzleLib.Cuda import Backend
+	initGPU(Backend)
 
-	from PuzzleLib.Cuda.Wrappers.CuBlas import context, CuBlas
-	from PuzzleLib.Cuda.Kernels.MatVec import matsum, matvec
 
-	def wrapMulTensorOnVecGroup(tensor, vecs, out=None, formatT="bgp", transpT=False,
-								alpha=1.0, beta=0.0, allocator=memoryPool):
+def initHip():
+	from PuzzleLib.Hip import Backend
+	initGPU(Backend)
+
+
+def initGPU(Backend):
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	memoryPool, blas, matmod = backend.memoryPool, backend.blas, backend.matmod
+
+	formats = {
+		"gbp": backend.GroupFormat.gbp.value,
+		"bgp": backend.GroupFormat.bgp.value
+	}
+
+	def wrapMulTensorOnVecGroup(tensor, vecs, out=None, formatT="bgp", transpT=False, alpha=1.0, beta=0.0):
 		assert tensor.ndim == 3 and formatT == "gbp"
 		axis = 0 if transpT else 1
 
-		return matvec(tensor, vecs, axis, out, alpha, beta, allocator)
+		return matmod.matvec(tensor, vecs, axis, out, alpha, beta, memoryPool)
 
-	def wrapSumOnTensorGroup(tensor, out=None, formatT="bgp", cols=True, alpha=1.0, beta=0.0, allocator=memoryPool):
+	def wrapSumOnTensorGroup(tensor, out=None, formatT="bgp", cols=True, alpha=1.0, beta=0.0):
 		assert tensor.ndim == 3
 		axis = (1 if formatT == "gbp" else 0) if cols else 2
 
-		return matsum(tensor, axis, out, alpha, beta, allocator)
+		return matmod.matsum(tensor, axis, out, alpha, beta, memoryPool)
 
 	def wrapMulTensorBatch(A, B, formatA="bgp", formatB="bgp", out=None, formatOut="bgp", transpA=False, transpB=False,
-						   alpha=1.0, beta=0.0, allocator=memoryPool):
-		formats = {
-			"gbp": CuBlas.GROUPFORMAT_GBP,
-			"bgp": CuBlas.GROUPFORMAT_BGP
-		}
-
+						   alpha=1.0, beta=0.0):
 		formatA, formatB, formatOut = formats[formatA], formats[formatB], formats[formatOut]
-		return context.gemmBatched(A, B, formatA, formatB, formatOut, transpA, transpB, alpha, beta, out, allocator)
+		return blas.gemmBatched(A, B, formatA, formatB, formatOut, transpA, transpB, alpha, beta, out, memoryPool)
 
 	global mulTensorOnVecGroup, sumOnTensorGroup, mulTensorBatch
 	mulTensorOnVecGroup = wrapMulTensorOnVecGroup
 	sumOnTensorGroup = wrapSumOnTensorGroup
 	mulTensorBatch = wrapMulTensorBatch
-
-
-def initOpenCL():
-	from PuzzleLib.OpenCL.Wrappers import CLBlasGroup
-
-	global mulTensorOnVecGroup, sumOnTensorGroup, mulTensorBatch
-	mulTensorOnVecGroup = CLBlasGroup.mulTensorOnVecGroup
-	sumOnTensorGroup = CLBlasGroup.sumOnTensorGroup
-	mulTensorBatch = CLBlasGroup.mulTensorBatch
 
 
 def initCPU():
