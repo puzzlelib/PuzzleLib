@@ -19,4 +19,5 @@ void ${NAME}_resize($NAME *self, size_t capacity);
 void ${NAME}_append($NAME *self, $T elem);
 bool ${NAME}_pop($NAME *self, $T *elem);
 void ${NAME}_clear($NAME *self);
-bool ${NAME}_index($NAME *self, size_t index, $T *elem);
+bool ${NAME}_get($NAME *self, size_t index, $T *elem);
+bool ${NAME}_set($NAME *self, size_t index, $T elem);

@@ -48,7 +48,9 @@ void ${NAME}_append($NAME *self, $T elem)
 		${NAME}_resize(self, size);
 	}
 
+	$BORROW(elem);
 	self->ptr[self->size] = elem;
+
 	self->size += 1;
 }
 
@@ -74,11 +76,24 @@ void ${NAME}_clear($NAME *self)
 }
 
 
-bool ${NAME}_index($NAME *self, size_t index, $T *elem)
+bool ${NAME}_get($NAME *self, size_t index, $T *elem)
 {
 	if (index >= self->size)
 		return false;
 
 	*elem = self->ptr[index];
+	return true;
+}
+
+
+bool ${NAME}_set($NAME *self, size_t index, $T elem)
+{
+	if (index >= self->size)
+		return false;
+
+	$BORROW(elem);
+	$DESTRUCT(self->ptr[index]);
+
+	self->ptr[index] = elem;
 	return true;
 }

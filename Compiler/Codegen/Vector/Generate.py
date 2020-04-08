@@ -4,8 +4,8 @@ from string import Template
 from PuzzleLib.Compiler.Toolchain import createTemplateNames, writeTemplates, buildTemplateTest
 
 
-def generateVector(name, T, destruct="(void)", minCapacity=16, headerPreambule=None, bodyPreambule=None,
-				   malloc="malloc", free="free", filename=None):
+def generateVector(name, T, borrow="(void)", destruct="(void)", minCapacity=16,
+				   headerPreambule=None, bodyPreambule=None, malloc="malloc", free="free", filename=None):
 	headerPreambule = "%s\n\n" % headerPreambule if headerPreambule is not None else ""
 	bodyPreambule = "%s\n\n" % bodyPreambule if bodyPreambule is not None else ""
 
@@ -21,7 +21,7 @@ def generateVector(name, T, destruct="(void)", minCapacity=16, headerPreambule=N
 	with open(bodyTmpl, mode="r", encoding="utf-8") as f:
 		body = Template(f.read()).substitute(
 			HEADER_NAME=os.path.basename(headername), BODY_PREAMBULE=bodyPreambule, NAME=name, T=T,
-			MIN_CAPACITY=minCapacity, MALLOC=malloc, FREE=free, DESTRUCT=destruct
+			MIN_CAPACITY=minCapacity, MALLOC=malloc, FREE=free, BORROW=borrow, DESTRUCT=destruct
 		)
 
 	writeTemplates([

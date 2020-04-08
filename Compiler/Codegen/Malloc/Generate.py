@@ -1,7 +1,7 @@
 import os
 from string import Template
 
-from PuzzleLib.Compiler.Containers.Tree.Generate import generateTree
+from PuzzleLib.Compiler.Codegen.Tree.Generate import generateTree
 from PuzzleLib.Compiler.Toolchain import createTemplateNames, writeTemplates, buildTemplateTest
 
 
@@ -47,7 +47,7 @@ Allocation;
 
 def unittest():
 	TraceMalloc = buildTemplateTest(
-		name="TraceMalloc", bindingName="TMallocTest.c", path="../TestData", generator=generateMalloc,
+		name="TraceMalloc", bindingName="TMallocTest.c", path="../../TestData", generator=generateMalloc,
 		defines=["ENABLE_TRACE_MALLOC"]
 	)
 

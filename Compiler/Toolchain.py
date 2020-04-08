@@ -1,22 +1,32 @@
 import sys, os, stat, shutil, importlib.util
+from enum import Enum
 
 from PuzzleLib.Compiler.Compilers.GCC import GCC, Clang
 from PuzzleLib.Compiler.Compilers.MSVC import MSVC
 from PuzzleLib.Compiler.Compilers.NVCC import NVCC
 
 
-def guessToolchain(verbose=0):
-	if sys.platform == "win32":
-		return MSVC(verbose)
+class Toolchain(Enum):
+	msvc = "msvc"
+	gcc = "gcc"
+	clang = "clang"
 
-	elif sys.platform == "linux":
-		return GCC(verbose)
 
-	elif sys.platform == "darwin":
-		return Clang(verbose)
+def guessToolchain(verbose=0, tc=None):
+	if tc is None:
+		tc = {
+			"win32": Toolchain.msvc,
+			"linux": Toolchain.gcc,
+			"darwin": Toolchain.clang
+		}[sys.platform]
 
-	else:
-		raise NotImplementedError(sys.platform)
+	cls = {
+		Toolchain.msvc: MSVC,
+		Toolchain.gcc: GCC,
+		Toolchain.clang: Clang
+	}[Toolchain(tc)]
+
+	return cls(verbose=verbose)
 
 
 def guessNVCCToolchain(verbose=0, forPython=False):
@@ -39,17 +49,21 @@ def createTemplateNames(name):
 
 def writeTemplates(sources):
 	for source, filename in sources:
-		writeTemplate(source, filename)
+		if os.path.exists(filename):
+			os.chmod(filename, stat.S_IWUSR | stat.S_IREAD)
+
+		with open(filename, mode="w", encoding="utf-8") as f:
+			f.write(source)
+
+		os.chmod(filename, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
 
 
-def writeTemplate(source, filename):
-	if os.path.exists(filename):
-		os.chmod(filename, stat.S_IWUSR | stat.S_IREAD)
+def copySource(src, dst):
+	if os.path.exists(dst):
+		os.chmod(dst, stat.S_IWUSR | stat.S_IREAD)
 
-	with open(filename, mode="w", encoding="utf-8") as f:
-		f.write(source)
-
-	os.chmod(filename, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+	shutil.copy(src, dst)
+	os.chmod(dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
 
 
 def buildTemplateTest(name, path, bindingName, generator, verbose=2, debuglevel=0, level=4, defines=None, **kwargs):

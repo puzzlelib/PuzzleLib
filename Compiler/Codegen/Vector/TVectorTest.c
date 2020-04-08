@@ -74,7 +74,7 @@ static PyObject *PyIntVector_getItem(PyObject *self, Py_ssize_t index)
 	PyIntVector *pyvec = (PyIntVector *)self;
 	int value;
 
-	if (!IntVector_index(&pyvec->vector, index, &value))
+	if (!IntVector_get(&pyvec->vector, index, &value))
 	{
 		PyErr_SetString(PyExc_ValueError, "index out of bounds");
 		return NULL;
