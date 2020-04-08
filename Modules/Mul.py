@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import copy, memoryPool as memPool
+from PuzzleLib.Backend.Utils import dtypesSupported, copy, memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import mulKer
 
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -9,7 +9,7 @@ from PuzzleLib.Modules.Module import ModuleError, Module
 
 class Mul(Module):
 	def updateData(self, data):
-		self.data = gpuarray.empty(data[0].shape, dtype=np.float32, allocator=memPool)
+		self.data = gpuarray.empty(data[0].shape, dtype=data[0].dtype, allocator=memPool)
 		self.data.fill(1.0)
 
 		for dat in data:
@@ -42,18 +42,33 @@ class Mul(Module):
 		return [shape] * len(self.inData)
 
 
+	def calcMode(self, T):
+		dtypes = {dtype for dtype, _ in dtypesSupported()}
+
+		if T not in dtypes:
+			raise ModuleError("Unsupported dtype %s" % T)
+
+		self.calctype = T
+
+
 def unittest():
-	hostData1 = np.random.randn(2, 5, 5).astype(np.float32)
-	hostData2 = np.random.randn(*hostData1.shape).astype(np.float32)
+	for dtype, _ in dtypesSupported():
+		mulTest(dtype)
+
+
+def mulTest(dtype):
+	hostData1 = np.random.randn(2, 5, 5).astype(dtype)
+	hostData2 = np.random.randn(*hostData1.shape).astype(dtype)
 
 	data1, data2 = gpuarray.to_gpu(hostData1), gpuarray.to_gpu(hostData2)
 
 	mul = Mul()
-	mul([data1, data2])
+	mul.calcMode(dtype)
 
+	mul([data1, data2])
 	assert np.allclose(mul.data.get(), hostData1 * hostData2)
 
-	hostGrad = np.random.randn(*mul.data.shape).astype(np.float32)
+	hostGrad = np.random.randn(*mul.data.shape).astype(dtype)
 
 	grad = gpuarray.to_gpu(hostGrad)
 	mul.backward(grad)

@@ -28,7 +28,7 @@ def main():
 
 	msg = open(binaryname, "rb").read()
 
-	print("Started parsing binaryproto %s ..." % (binaryname))
+	print("Started parsing binaryproto %s ..." % binaryname)
 	blob.ParseFromString(msg)
 
 	data = np.array(blob.data, dtype=np.float32).reshape((1, blob.channels, blob.height, blob.width))

@@ -4,10 +4,10 @@ from string import Template
 from PuzzleLib.Config import libname, Backend, systemLog
 from PuzzleLib.Compiler.JIT import getCacheDir, computeHash, FileLock
 
-from PuzzleLib.Hip import Driver as HipDriver
-
 from PuzzleLib.Cuda.SourceModule import SourceModule, ElementwiseKernel, ElementHalf2Kernel, ReductionKernel
 from PuzzleLib.Cuda.SourceModule import eltwiseTest, reductionTest
+
+from PuzzleLib.Hip import Driver as HipDriver
 
 
 hipWarpBit, hipBlockBit = 6, 8

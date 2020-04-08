@@ -1,7 +1,7 @@
 import numpy as np
 
-from PuzzleLib.Hip import Driver as HipDriver
 from PuzzleLib.Cuda.Utils import SharedArray, shareMemTest, randomTest
+from PuzzleLib.Hip import Driver as HipDriver
 
 
 class HipSharedArray(SharedArray):

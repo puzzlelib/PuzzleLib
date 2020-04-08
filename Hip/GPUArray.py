@@ -1,9 +1,9 @@
 import numpy as np
 
+from PuzzleLib.Cuda.GPUArray import extendGPUArray, arithmTest
+
 from PuzzleLib.Hip import Driver as HipDriver
 from PuzzleLib.Hip.SourceModule import HipEltwiseKernel, HipEltHalf2Kernel, HipReductionKernel
-
-from PuzzleLib.Cuda.GPUArray import extendGPUArray, arithmTest
 
 
 HipGPUArray = extendGPUArray(HipDriver, HipEltwiseKernel, HipEltHalf2Kernel, HipReductionKernel)

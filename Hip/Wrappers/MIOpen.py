@@ -3,11 +3,11 @@ from enum import Enum
 
 import numpy as np
 
-from PuzzleLib.Hip.Driver import GPUArray
-from PuzzleLib.Hip.ThirdParty import libmiopen
-
 from PuzzleLib.Cuda.Wrappers.CuDnn import conv2dTest, conv3dTest, convGroupTest
 from PuzzleLib.Cuda.Wrappers.CuDnn import deconv2dTest, deconv3dTest, deconvGroupTest, softmax2dTest
+
+from PuzzleLib.Hip.Driver import GPUArray
+from PuzzleLib.Hip.ThirdParty import libmiopen
 
 
 class DataType(Enum):

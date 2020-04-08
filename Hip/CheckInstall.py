@@ -1,3 +1,4 @@
+import sys
 from PuzzleLib.Cuda.CheckInstall import checkRuntime, checkCompiler, checkPipPackages
 
 
@@ -80,14 +81,27 @@ exit:
 """
 
 
-def main():
+def checkHipInstall(withPip):
 	checkRuntime(
 		name="HIP", compiler="hipcc",
 		download="https://rocm.github.io/install.html#ubuntu-support---installing-from-a-debian-repository",
 		envpath="HIP_PATH"
 	)
 	checkCompiler(name="HIP", compiler="hipcc", kernel=hipTestKernel, ext=".hip.cpp")
-	checkPipPackages()
+
+	if withPip:
+		checkPipPackages()
+
+
+def main():
+	try:
+		checkHipInstall(withPip=True)
+
+	except RuntimeError as e:
+		print(e)
+
+		print("Exiting ...")
+		sys.exit(1)
 
 
 if __name__ == "__main__":

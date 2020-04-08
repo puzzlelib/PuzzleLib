@@ -1,11 +1,13 @@
-import os, stat, shutil, subprocess
+import os, stat, shutil
 from enum import Enum
 
 from setuptools import setup, find_packages
 from setuptools.command.install import install
+from setuptools.command.sdist import sdist
 
 
 libname = "PuzzleLib"
+version = "1.0.1"
 
 
 class Options(str, Enum):
@@ -24,17 +26,25 @@ def removeReadOnly(_, name, __):
 def markPackages(path):
 	for dirpath, dirnames, filenames in os.walk(path):
 		if "__init__.py" not in filenames:
-			initfile = os.path.join(dirpath, "__init__.py")
-
-			with open(initfile, "w", encoding="utf-8"):
-				pass
+			init(dirpath)
 
 
-def pathToPackageName(path):
+def init(dirpath):
+	initfile = os.path.join(dirpath, "__init__.py")
+
+	with open(initfile, "w", encoding="utf-8"):
+		pass
+
+	return initfile
+
+
+def pathToPackageName(path, withLibname=True):
+	i = 1 if withLibname else 0
+
 	package = path.split(os.path.sep)
 	idx = list(reversed(package)).index(libname)
 
-	return ".".join(package[-idx - 1:])
+	return ".".join(package[-idx - i:])
 
 
 class InstallCommand(install):
@@ -75,33 +85,33 @@ class InstallCommand(install):
 			options.add(option)
 
 		handlers = [
-			("Compiler", self.handleCompilerPackage),
+			("Compiler", self.installCompilerPackage),
 
-			("CPU", self.handlePythonPackage),
-			("Intel", self.handleIntelPackage),
-			(("Cuda", "Hip"), self.handleGpuPackages),
-			("Converter", self.handleConverterPackage),
+			("CPU", self.installPythonPackage),
+			("Intel", self.installIntelPackage),
+			(("Cuda", "Hip"), self.installGpuPackages),
+			("Converter", self.installConverterPackage),
 
-			("Backend", self.handlePythonPackage),
-			("Modules", self.handlePythonPackage),
-			("Containers", self.handlePythonPackage),
-			("Cost", self.handlePythonPackage),
-			("Optimizers", self.handlePythonPackage),
-			("Handlers", self.handlePythonPackage),
-			("Passes", self.handlePythonPackage),
-			("Models", self.handlePythonPackage),
+			("Backend", self.installPythonPackage),
+			("Modules", self.installPythonPackage),
+			("Containers", self.installPythonPackage),
+			("Cost", self.installPythonPackage),
+			("Optimizers", self.installPythonPackage),
+			("Handlers", self.installPythonPackage),
+			("Passes", self.installPythonPackage),
+			("Models", self.installPythonPackage),
 
-			("Datasets", self.handlePythonPackage),
-			("Transformers", self.handlePythonPackage),
+			("Datasets", self.installPythonPackage),
+			("Transformers", self.installPythonPackage),
 
-			("TestData", self.handleDataPackage),
-			("TestLib", self.handlePythonPackage)
+			("TestData", self.installDataPackage),
+			("TestLib", self.installPythonPackage)
 		]
 
 		os.mkdir(self.cachePath)
 
 		try:
-			self.distribution.package_data = self.handlePackages(self.projectPath, self.cachePath, handlers, options)
+			self.distribution.package_data = self.installPackages(self.projectPath, self.cachePath, handlers, options)
 			markPackages(self.cachePath)
 
 			self.distribution.packages = [libname] + [
@@ -114,12 +124,15 @@ class InstallCommand(install):
 
 
 	@staticmethod
-	def handlePackages(src, dst, handlers, options):
+	def installPackages(src, dst, handlers, options):
 		packageData = {}
+
+		if not os.path.exists(dst):
+			os.mkdir(dst)
 
 		for file in os.listdir(src):
 			if file.endswith(".py") and os.path.abspath(os.path.join(src, file)) != __file__:
-				shutil.copy(file, os.path.join(dst, file))
+				shutil.copy(os.path.join(src, file), os.path.join(dst, file))
 
 		for name, handler in handlers:
 			if isinstance(name, str):
@@ -133,7 +146,7 @@ class InstallCommand(install):
 
 
 	@staticmethod
-	def handlePythonPackage(src, dst, _):
+	def installPythonPackage(src, dst, _):
 		def ignore(s, names):
 			files = {name for name in names if not os.path.isdir(os.path.join(s, name)) and not name.endswith(".py")}
 			files.add("__pycache__")
@@ -145,7 +158,7 @@ class InstallCommand(install):
 
 
 	@staticmethod
-	def handleCompilerPackage(src, dst, _):
+	def installCompilerPackage(src, dst, _):
 		shutil.copytree(src, dst, ignore=lambda s, names: {"__pycache__", "TestData"})
 		os.mkdir(os.path.join(dst, "TestData"))
 
@@ -159,48 +172,51 @@ class InstallCommand(install):
 		return data
 
 
-	def handleGpuPackages(self, src, dst, options):
+	def installGpuPackages(self, src, dst, options):
 		data = {}
 
 		cudaSrc, hipSrc = src
 		cudaDst, hipDst = dst
 
-		if Options.cuda in options:
+		cuda, hip = Options.cuda in options, Options.hip in options
+
+		if cuda or hip:
 			shutil.copytree(cudaSrc, cudaDst, ignore=lambda s, names: {"__pycache__", ".gitignore"})
 
-			from PuzzleLib.Cuda.CheckInstall import main as installChecker
-			from PuzzleLib.Cuda.Source.Build import main as driverBuilder
+		if cuda:
+			from PuzzleLib.Cuda.CheckInstall import checkCudaInstall
+			from PuzzleLib.Cuda.Source.Build import main as buildDriver
 
-			data.update(self.handleGpuPackage("Cuda", installChecker, driverBuilder, cudaDst))
+			data.update(self.installGpuPackage("Cuda", checkCudaInstall, buildDriver, cudaDst))
 
-		if Options.hip in options:
+		if hip:
 			shutil.copytree(hipSrc, hipDst, ignore=lambda s, names: {"__pycache__", ".gitignore"})
 
-			from PuzzleLib.Hip.CheckInstall import main as installChecker
-			from PuzzleLib.Hip.Source.Build import main as driverBuilder
+			from PuzzleLib.Hip.CheckInstall import main as checkHipInstall
+			from PuzzleLib.Hip.Source.Build import main as buildDriver
 
-			data.update(self.handleGpuPackage("Hip", installChecker, driverBuilder, hipDst))
+			data.update(self.installGpuPackage("Hip", checkHipInstall, buildDriver, hipDst))
 
-		if Options.cuda in options:
+		if cuda or hip:
 			shutil.rmtree(os.path.join(cudaDst, "Source"), onerror=removeReadOnly)
 
-		if Options.hip in options:
+		if hip:
 			shutil.rmtree(os.path.join(hipDst, "Source"), onerror=removeReadOnly)
 
 		return data
 
 
 	@staticmethod
-	def handleGpuPackage(name, installChecker, driverBuilder, dst):
+	def installGpuPackage(name, checkInstall, buildDriver, dst):
 		print("\nChecking if all dependencies for %s are satisfied ..." % name)
-		installChecker()
+		checkInstall(withPip=False)
 
 		cwd = os.getcwd()
 		try:
 			print("\nBuilding %s driver ..." % name)
 
 			os.chdir(os.path.join(dst, "Source"))
-			driver = os.path.abspath(driverBuilder())
+			driver = os.path.abspath(buildDriver())
 
 		finally:
 			os.chdir(cwd)
@@ -209,7 +225,7 @@ class InstallCommand(install):
 
 
 	@staticmethod
-	def handleIntelPackage(src, dst, options):
+	def installIntelPackage(src, dst, options):
 		if Options.intel not in options:
 			return {}
 
@@ -227,48 +243,48 @@ class InstallCommand(install):
 		return data
 
 
-	def handleConverterPackage(self, src, dst, options):
+	def installConverterPackage(self, src, dst, options):
 		handlers = [
-			("Caffe", self.handlePythonPackage),
-			("MXNet", self.handlePythonPackage),
+			("Caffe", self.installPythonPackage),
+			("MXNet", self.installPythonPackage),
 
-			("Examples", self.handlePythonPackage),
-			("ONNX", self.handlePythonPackage),
+			("Examples", self.installPythonPackage),
+			("ONNX", self.installPythonPackage),
 
-			("TensorRT", self.handleTensorRTPackage),
-			("OpenVINO", self.handleOpenVINOPackage)
+			("TensorRT", self.installTensorRTPackage),
+			("OpenVINO", self.installOpenVINOPackage)
 		]
 
-		data = self.handlePackages(src, dst, handlers, options)
+		data = self.installPackages(src, dst, handlers, options)
 		os.mkdir(os.path.join(dst, "TestData"))
 
 		return data
 
 
-	def handleTensorRTPackage(self, src, dst, options):
+	def installTensorRTPackage(self, src, dst, options):
 		if Options.tensorrt not in options:
 			return {}
 
 		os.mkdir(dst)
 		shutil.copytree(os.path.join(src, "Source"), os.path.join(dst, "Source"))
 
-		from PuzzleLib.Converter.TensorRT.Source.Build import main as driverBuilder
-		return self.handleInferenceEnginePackage("TensorRT", driverBuilder, src, dst)
+		from PuzzleLib.Converter.TensorRT.Source.Build import main as buildDriver
+		return self.installInferenceEnginePackage("TensorRT", buildDriver, src, dst)
 
 
-	def handleOpenVINOPackage(self, src, dst, options):
+	def installOpenVINOPackage(self, src, dst, options):
 		if Options.openvino not in options:
 			return {}
 
 		os.mkdir(dst)
 		shutil.copytree(os.path.join(src, "Source"), os.path.join(dst, "Source"))
 
-		from PuzzleLib.Converter.OpenVINO.Source.Build import main as driverBuilder
-		return self.handleInferenceEnginePackage("OpenVINO", driverBuilder, src, dst)
+		from PuzzleLib.Converter.OpenVINO.Source.Build import main as buildDriver
+		return self.installInferenceEnginePackage("OpenVINO", buildDriver, src, dst)
 
 
 	@staticmethod
-	def handleInferenceEnginePackage(name, driverBuilder, src, dst):
+	def installInferenceEnginePackage(name, buildDriver, src, dst):
 		for file in os.listdir(src):
 			if file.endswith(".py"):
 				shutil.copy(os.path.join(src, file), os.path.join(dst, file))
@@ -283,7 +299,7 @@ class InstallCommand(install):
 			sourcePath = os.path.join(dst, "Source")
 			os.chdir(sourcePath)
 
-			driver = driverBuilder()
+			driver = buildDriver()
 
 		finally:
 			os.chdir(cwd)
@@ -293,7 +309,7 @@ class InstallCommand(install):
 
 
 	@staticmethod
-	def handleDataPackage(src, dst, __):
+	def installDataPackage(src, dst, _):
 		os.mkdir(dst)
 
 		data = ["test.tar", "test.zip"]
@@ -303,14 +319,146 @@ class InstallCommand(install):
 		return {pathToPackageName(dst): data}
 
 
+class SdistCommand(sdist):
+	projectPath = os.path.dirname(os.path.abspath(__file__))
+
+
+	def run(self):
+		initfiles = []
+
+		handlers = [
+			("Compiler", self.distributeCompilerPackage),
+
+			("CPU", self.distributePythonPackage),
+			("Intel", self.distributePythonPackage),
+			("Hip", self.distributeGpuPackage),
+			("Cuda", self.distributeGpuPackage),
+			("Converter", self.distributeConverterPackage),
+
+			("Backend", self.distributePythonPackage),
+			("Modules", self.distributePythonPackage),
+			("Containers", self.distributePythonPackage),
+			("Cost", self.distributePythonPackage),
+			("Optimizers", self.distributePythonPackage),
+			("Handlers", self.distributePythonPackage),
+			("Passes", self.distributePythonPackage),
+			("Models", self.distributePythonPackage),
+
+			("Datasets", self.distributePythonPackage),
+			("Transformers", self.distributePythonPackage),
+
+			("TestData", self.distributeDataPackage),
+			("TestLib", self.distributePythonPackage)
+		]
+
+		try:
+			initfiles, data = self.distributePackages(self.projectPath, handlers)
+
+			self.distribution.package_data = data
+			self.distribution.packages = find_packages(where=self.projectPath)
+
+			super().run()
+
+		finally:
+			for initfile in initfiles:
+				os.unlink(initfile)
+
+
+	@staticmethod
+	def distributePackage(path, exclude, includeExts):
+		initfiles = []
+		data = {}
+
+		for dirpath, dirnames, filenames in os.walk(path):
+			for exdir in exclude:
+				if exdir in dirnames:
+					dirnames.remove(exdir)
+
+			includeFiles = [file for file in filenames if any(file.endswith(ext) for ext in includeExts)]
+			if len(includeFiles) > 0:
+				data[pathToPackageName(dirpath, withLibname=False)] = includeFiles
+
+			if "__init__.py" not in filenames:
+				initfiles.append(init(dirpath))
+
+		return initfiles, data
+
+
+	@staticmethod
+	def distributePackages(path, handlers):
+		initfiles = []
+		data = {}
+
+		for name, handler in handlers:
+			pkgInitfiles, pkgData = handler(os.path.join(path, name))
+
+			data.update(pkgData)
+			initfiles.extend(pkgInitfiles)
+
+		return initfiles, data
+
+
+	def distributePythonPackage(self, path):
+		return self.distributePackage(path=path, exclude=["__pycache__"], includeExts=[])
+
+
+	def distributeCompilerPackage(self, path):
+		return self.distributePackage(path=path, exclude=["__pycache__"], includeExts=[".c", ".h"])
+
+
+	def distributeGpuPackage(self, path):
+		return self.distributeCompilerPackage(path)
+
+
+	def distributeConverterPackage(self, path):
+		handlers = [
+			("Caffe", self.distributePythonPackage),
+			("MXNet", self.distributePythonPackage),
+
+			("Examples", self.distributePythonPackage),
+			("ONNX", self.distributePythonPackage),
+
+			("TensorRT", self.distributeTensorRTPackage),
+			("OpenVINO", self.distributeOpenVINOPackage)
+		]
+
+		initfiles, data = self.distributePackages(path, handlers)
+		initfiles.append(init(path))
+
+		return initfiles, data
+
+
+	def distributeTensorRTPackage(self, path):
+		return self.distributePackage(path=path, exclude=["__pycache__"], includeExts=[".cpp", ".h", ".cu"])
+
+
+	def distributeOpenVINOPackage(self, path):
+		return self.distributePackage(path=path, exclude=["__pycache__"], includeExts=[".cpp"])
+
+
+	def distributeDataPackage(self, path):
+		data = ["test.tar", "test.zip"]
+
+		inits, pkgData = self.distributePythonPackage(path)
+		pkgData.update({pathToPackageName(path, withLibname=False): data})
+
+		return inits, pkgData
+
+
 def main():
 	setup(
 		name=libname,
-		version="1.0.0",
-		cmdclass={"install": InstallCommand},
+		version=version,
+		cmdclass={
+			"install": InstallCommand,
+			"sdist": SdistCommand
+		},
 		url="https://puzzlelib.org",
+		download_url="https://github.com/puzzlelib/PuzzleLib/tags",
+		author="Ashmanov Neural Networks",
 		python_requires=">=3.5",
-		license="Apache-2.0"
+		license="Apache-2.0",
+		keywords=["puzzlelib", "deep learning", "neural nets"]
 	)
 
 

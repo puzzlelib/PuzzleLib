@@ -6,10 +6,42 @@ from PuzzleLib.Compiler.Codegen.Types import half_t, float_t
 from PuzzleLib.Cuda.Utils import roundUpDiv
 
 
-mapTmpl = """
+atomicAddTmpl = """
 
 #include <cuda_fp16.h>
 
+
+__device__ __forceinline__ void atomicAddFP16(half *address, half val)
+{
+#if __CUDA_ARCH__ < 700
+	const size_t halfbits = 8 * sizeof(half);
+	size_t offset = (size_t)address & 2;
+
+	unsigned *addrUI = (unsigned *)((size_t)address - offset);
+	unsigned assumed, old = *addrUI;
+
+	do
+	{
+		assumed = old;
+
+		unsigned short s = offset ? (old >> halfbits) : (old & 0xFFFF);
+		s = __half_as_short((float)__short_as_half(s) + (float)val);
+
+		unsigned packed = offset ? ((old & 0xFFFF) | (s << halfbits)) : ((old & 0xFFFF0000) | s);
+		old = atomicCAS(addrUI, assumed, packed);
+	}
+	while (assumed != old);
+
+#else
+	atomicAdd(address, val);
+
+#endif
+}
+
+"""
+
+
+mapTmpl = """
 
 __device__ __forceinline__ void map1d(int insize, int outsize, int index, int lpad, int *inindex, int *outindex)
 {
@@ -38,37 +70,6 @@ __device__ __forceinline__ void map2d(int inh, int inw, int outh, int outw, int 
 
 	*inindex = inoffset + iny * inw + inx;
 	*outindex = outoffset + outy * outw + outx;
-}
-
-__device__ __forceinline__ void gpuAtomicAdd(float *address, float val)
-{
-	atomicAdd(address, val);
-}
-
-__device__ __forceinline__ void gpuAtomicAdd(half *address, half val)
-{
-#if __CUDA_ARCH__ < 700
-	unsigned *addrUI = (unsigned *)((char *)address - ((size_t)address & 2));
-	unsigned assumed, old = *addrUI;
-
-	do
-	{
-		assumed = old;
-
-		half sah = __short_as_half(((size_t)address & 2) ? (old >> 16) : (old & 0xffff));
-		sah = (float)sah + (float)val;
-
-		short has = __half_as_short(sah);
-		old = ((size_t)address & 2) ? (old & 0xffff) | (has << 16) : (old & 0xffff0000) | has;
-
-		old = atomicCAS(addrUI, assumed, old);
-	}
-	while (assumed != old);
-
-#else
-	atomicAdd(address, val);
-
-#endif
 }
 
 """
@@ -102,7 +103,7 @@ __global__ void reflectpad1dBackward$ext($T *ingrad, const $T *outgrad, int insi
 		int inindex = 0, outindex = 0;
 		map1d(insize, outsize, index, lpad, &inindex, &outindex);
 
-		gpuAtomicAdd(&ingrad[inindex], outgrad[outindex]);
+		atomicAdd$ext(&ingrad[inindex], outgrad[outindex]);
 	}
 }
 
@@ -134,7 +135,7 @@ __global__ void reflectpad2dBackward$ext($T *ingrad, const $T *outgrad, int inh,
 		int inindex = 0, outindex = 0;
 		map2d(inh, inw, outh, outw, index, upad, lpad, &inindex, &outindex);
 
-		gpuAtomicAdd(&ingrad[inindex], outgrad[outindex]);
+		atomicAdd$ext(&ingrad[inindex], outgrad[outindex]);
 	}
 }
 
@@ -146,8 +147,8 @@ class PadModule:
 		self.backend = backend
 		self.GPUArray, self.warpSize = backend.GPUArray, backend.warpSize
 
-		self.mod = backend.SourceModule("%s%s%s" % (
-			mapTmpl, padTmpl.substitute(T=half_t, ext="FP16"), padTmpl.substitute(T=float_t, ext="")
+		self.mod = backend.SourceModule("%s%s%s%s" % (
+			atomicAddTmpl, mapTmpl, padTmpl.substitute(T=half_t, ext="FP16"), padTmpl.substitute(T=float_t, ext="")
 		))
 
 
@@ -237,9 +238,9 @@ def backendTest(Backend):
 	for deviceIdx in range(Backend.getDeviceCount()):
 		module = PadModule(Backend.getBackend(deviceIdx))
 
-		for dtype, _ in module.backend.dtypesSupported():
+		for dtype, atol in module.backend.dtypesSupported():
 			reflectpad1dTest(module, dtype)
-			reflectpad2dTest(module, dtype)
+			reflectpad2dTest(module, dtype, atol)
 
 
 def reflectpad1dTest(module, dtype):
@@ -277,7 +278,7 @@ def reflectpad1dTest(module, dtype):
 	)
 
 
-def reflectpad2dTest(module, dtype):
+def reflectpad2dTest(module, dtype, atol):
 	batchsize, maps, inh, inw = 4, 8, 12, 15
 	upad, bpad, lpad, rpad = 2, 3, 2, 3
 
@@ -296,7 +297,7 @@ def reflectpad2dTest(module, dtype):
 		hostData[:, :, inh - 1 - bpad:inh - 1, inw - 1 - rpad:inw - 1]
 	)
 
-	hostGrad = np.random.randn(batchsize, maps, outh, outw).astype(np.float32)
+	hostGrad = np.random.randn(batchsize, maps, outh, outw).astype(dtype)
 
 	grad = module.GPUArray.toGpu(hostGrad)
 	ingrad = module.reflectpadBackward(grad, pad=(upad, bpad, lpad, rpad))
@@ -312,14 +313,14 @@ def reflectpad2dTest(module, dtype):
 		hostGrad[:, :, :upad, :lpad][:, :, ::-1, ::-1] +
 		hostGrad[:, :, upad + 1:2 * upad + 1, lpad + 1:2 * lpad + 1] +
 		hostGrad[:, :, :upad, lpad + 1:2 * lpad + 1][:, :, ::-1, :] +
-		hostGrad[:, :, upad + 1:2 * upad + 1, :lpad][:, :, :, ::-1]
+		hostGrad[:, :, upad + 1:2 * upad + 1, :lpad][:, :, :, ::-1], atol=atol
 	)
 	assert np.allclose(
 		hostInGrad[:, :, inh - bpad - 1:inh - 1, inw - rpad - 1:inw - 1],
 		hostGrad[:, :, outh - bpad:, outw - rpad:][:, :, ::-1, ::-1] +
 		hostGrad[:, :, outh - 2 * bpad - 1:outh - bpad - 1, outw - 2 * rpad - 1:outw - rpad - 1] +
 		hostGrad[:, :, outh - bpad:, outw - 2 * rpad - 1:outw - rpad - 1][:, :, ::-1, :] +
-		hostGrad[:, :, outh - 2 * bpad - 1:outh - bpad - 1, outw - rpad:][:, :, :, ::-1]
+		hostGrad[:, :, outh - 2 * bpad - 1:outh - bpad - 1, outw - rpad:][:, :, :, ::-1], atol=atol
 	)
 
 

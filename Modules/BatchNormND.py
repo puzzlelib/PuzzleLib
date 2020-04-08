@@ -32,16 +32,16 @@ class BatchNormND(Module):
 		if empty:
 			return
 
-		if not affine:
-			sscale = 0
-
 		shape = (1, maps) + self.repeat(1, nd)
 
-		self.setVar("scale", Variable(gpuarray.to_gpu(np.random.normal(1.0, sscale, shape).astype(self.calctype))))
+		scale = np.random.normal(1.0, sscale if affine else 0.0, shape).astype(self.calctype)
+		var = np.ones(shape, dtype=self.calctype)
+
+		self.setVar("scale", Variable(gpuarray.to_gpu(scale)))
 		self.setVar("bias", Variable(gpuarray.zeros(shape, dtype=self.calctype)))
 
 		self.setAttr("mean", gpuarray.zeros(shape, dtype=self.calctype))
-		self.setAttr("var", gpuarray.to_gpu(np.ones(shape, dtype=self.calctype)))
+		self.setAttr("var", gpuarray.to_gpu(var))
 
 
 	def updateData(self, data):

@@ -112,7 +112,9 @@ class ConvND(Module):
 			self.vars = {}
 
 			for varName, var in variables.items():
-				self.setVar(varName, Variable(var.data.astype(T), name=var.name, grad=var.grad.astype(T)))
+				self.setVar(varName, Variable(
+					var.data.astype(T), name=var.name, grad=var.grad.astype(T) if var.grad is not None else None
+				))
 
 			self.calctype = T
 

@@ -3,8 +3,9 @@ import sys, os
 import numpy as np
 
 from PuzzleLib.Compiler.Toolchain import guessToolchain
-from PuzzleLib.Compiler.Containers.Vector.Generate import generateVector
-from PuzzleLib.Compiler.Malloc.Generate import generateMalloc
+from PuzzleLib.Compiler.Codegen.PyDefines.Generate import generatePyDefines
+from PuzzleLib.Compiler.Codegen.Vector.Generate import generateVector
+from PuzzleLib.Compiler.Codegen.Malloc.Generate import generateMalloc
 
 
 def buildDriver(debugmode, verbose):
@@ -55,6 +56,8 @@ def prepareCuda(cc):
 
 
 def generateTemplates(path):
+	generatePyDefines(os.path.join(path, "Core"))
+
 	generateVector(
 		name="Cuda_AllocVector", T="Cuda_Ptr", minCapacity=128,
 		destruct="CUDA_FREE",

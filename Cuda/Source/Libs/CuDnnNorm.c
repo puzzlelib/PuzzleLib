@@ -170,8 +170,8 @@ inline static bool CuDnn_Context_batchNormNdBackward(CuDnn_Context *self, const 
 	if (!CuDnn_describeTensor(&outDesc, out))                   goto error_3;
 	if (!CuDnn_describe1DTensor(&scaleDesc, scale, grad->ndim)) goto error_4;
 
-	const void *meanPtr = (savemean != NULL) ? savemean->gpudata->ptr : NULL;
-	const void *invvarPtr = (saveinvvar != NULL) ? saveinvvar->gpudata->ptr : NULL;
+	const void *meanPtr; meanPtr = (savemean != NULL) ? savemean->gpudata->ptr : NULL;
+	const void *invvarPtr; invvarPtr = (saveinvvar != NULL) ? saveinvvar->gpudata->ptr : NULL;
 
 	CUDNN_CHECK(cudnnBatchNormalizationBackward(
 		self->handle, mode, &alpha, &beta, &alpha, &beta, dataDesc, data->gpudata->ptr, gradDesc, grad->gpudata->ptr,

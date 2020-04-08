@@ -75,6 +75,7 @@ class Merger(Provider):
 
 	def getRationedChunk(self, chunksize, ratios, permutate):
 		chunk = np.empty((chunksize, ) + self.datasets[0].shape[1:], dtype=self.datasets[0].dtype)
+		order, labels = None, None
 
 		if self.labelIds is not None:
 			labels = np.empty((chunksize, ), dtype=np.int32)

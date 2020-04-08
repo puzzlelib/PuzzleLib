@@ -1,5 +1,7 @@
 import numpy as np
 
+from PuzzleLib import Config
+
 from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Backend import Blas
 from PuzzleLib.Backend.Dnn.InstanceNorm import instanceNorm2d, instanceNorm2dBackward
@@ -31,26 +33,32 @@ class InstanceNorm2D(Module):
 
 
 	def updateData(self, data):
-		self.data, self.savemean, self.saveinvvar, self.extscale = instanceNorm2d(data, self.scale,
-																				  self.bias, self.epsilon)
+		self.data, self.savemean, self.saveinvvar, self.extscale = instanceNorm2d(
+			data, self.scale, self.bias, self.epsilon
+		)
 
 
 	def updateGrad(self, grad):
 		if self.affine:
-			self.grad, self.scalegrad, self.biasgrad = instanceNorm2dBackward(grad, self.inData, self.extscale,
-																			  self.savemean, self.saveinvvar,
-																			  self.epsilon, True)
+			self.grad, self.scalegrad, self.biasgrad = instanceNorm2dBackward(
+				grad, self.inData, self.extscale, self.savemean, self.saveinvvar, self.epsilon, True
+			)
 		else:
-			self.grad = instanceNorm2dBackward(grad, self.inData, self.extscale, self.savemean, self.saveinvvar,
-											   self.epsilon, False)
+			self.grad = instanceNorm2dBackward(
+				grad, self.inData, self.extscale, self.savemean, self.saveinvvar, self.epsilon, False
+			)
 
 
 	def accGradParams(self, grad, scale=1.0, momentum=0.0):
 		if self.affine:
-			Blas.addVectorToVector(self.scalegrad.ravel(), self.vars["scale"].grad.ravel(),
-								   out=self.vars["scale"].grad.ravel(), alpha=scale, beta=momentum)
-			Blas.addVectorToVector(self.biasgrad.ravel(), self.vars["bias"].grad.ravel(),
-								   out=self.vars["bias"].grad.ravel(), alpha=scale, beta=momentum)
+			Blas.addVectorToVector(
+				self.scalegrad.ravel(), self.vars["scale"].grad.ravel(),
+				out=self.vars["scale"].grad.ravel(), alpha=scale, beta=momentum
+			)
+			Blas.addVectorToVector(
+				self.biasgrad.ravel(), self.vars["bias"].grad.ravel(),
+				out=self.vars["bias"].grad.ravel(), alpha=scale, beta=momentum
+			)
 
 
 	def checkDataShape(self, shape):
@@ -79,6 +87,17 @@ class InstanceNorm2D(Module):
 			self.scalegrad, self.biasgrad = None, None
 
 
+	def calcMode(self, T):
+		if Config.backend == Config.Backend.cuda:
+			if T not in {np.float16, np.float32}:
+				raise ModuleError("Unsupported dtype %s" % T)
+
+		elif T != np.float32:
+			raise ModuleError("Unsupported dtype %s" % T)
+
+		self.calctype = T
+
+
 def unittest():
 	batchsize, maps, h, w = 5, 3, 4, 4
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
@@ -92,12 +111,9 @@ def unittest():
 	hostOutData = (hostData - np.mean(hostData, axis=1, keepdims=True)) * hostInvVar[:, np.newaxis]
 
 	assert np.allclose(instNorm2d.data.get(), hostOutData.reshape(data.shape))
-
-	from PuzzleLib import Config
-	if Config.backend == Config.Backend.intel:
-		assert np.allclose(instNorm2d.saveinvvar.get().ravel(), hostVar)
-	else:
-		assert np.allclose(instNorm2d.saveinvvar.get().ravel(), hostInvVar)
+	assert np.allclose(
+		instNorm2d.saveinvvar.get().ravel(), hostVar if Config.backend == Config.Backend.intel else hostInvVar
+	)
 
 	grad = gpuarray.to_gpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
 	instNorm2d.backward(grad)
@@ -106,6 +122,7 @@ def unittest():
 	hostCorrs = np.empty(shape=hostInvVar.shape, dtype=np.float32)
 	for i in range(hostCorrs.shape[0]):
 		hostCorrs[i] = np.dot(hostGrad[i], hostOutData[i]) / hostGrad.shape[1]
+
 	hostInGrad = hostGrad - np.mean(hostGrad, axis=1, keepdims=True) - \
 				 hostCorrs[:, np.newaxis] * instNorm2d.data.get().reshape(hostOutData.shape)
 	hostInGrad *= hostInvVar[:, np.newaxis]

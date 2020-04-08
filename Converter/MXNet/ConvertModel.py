@@ -57,9 +57,9 @@ def readKeys(file):
 	nkeys = struct.unpack("<Q", file.read(8))[0]
 
 	for i in range(nkeys):
-		len = struct.unpack("<Q", file.read(8))[0]
+		length = struct.unpack("<Q", file.read(8))[0]
 		data = array.array("B")
-		data.fromfile(file, len)
+		data.fromfile(file, length)
 
 		key = data.tobytes().decode()
 		keys.append(key)

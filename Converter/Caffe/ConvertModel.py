@@ -81,7 +81,7 @@ def main():
 
 		msg = open(modelname, "rb").read()
 
-		print("Started parsing caffemodel %s ... May take a lot of time ..." % (modelname))
+		print("Started parsing caffemodel %s ... May take a lot of time ..." % modelname)
 		net.ParseFromString(msg)
 
 		print("Started jsoning caffemodel ...")

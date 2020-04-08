@@ -7,6 +7,7 @@ from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Backend.Kernels.Embedder import embed, embedBackwardParams
+from PuzzleLib.Backend.Utils import dtypesSupported
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -167,26 +168,50 @@ class Embedder(Module):
 		self.outgrad = None
 
 
+	def calcMode(self, T):
+		if Config.backend in {Config.Backend.cuda, Config.Backend.hip}:
+			if self.calctype == T:
+				return
+
+			variables = self.vars
+			self.vars = {}
+
+			for varName, var in variables.items():
+				self.setVar(varName, Variable(
+					var.data.astype(T), name=var.name, grad=var.grad.astype(T) if var.grad is not None else None
+				))
+
+			self.calctype = T
+
+		else:
+			super().calcMode(T)
+
+
 def unittest():
-	calcTest()
+	for dtype, atol in dtypesSupported():
+		calcTest(dtype, atol)
+
 	verifyDataTest()
 
 
-def calcTest():
+def calcTest(dtype, atol):
 	batchsize, sentlength, embsize = 10, 20, 40
 	vocabsize = 1000
 
-	data = gpuarray.to_gpu(np.random.randint(low=-1, high=vocabsize, size=(batchsize, sentlength), dtype=np.int32))
+	hostData = np.random.randint(low=-1, high=vocabsize, size=(batchsize, sentlength), dtype=np.int32)
+	data = gpuarray.to_gpu(hostData)
 
 	embedder = Embedder(vocabsize, sentlength, embsize)
+	embedder.calcMode(dtype)
+
 	embedder(data)
 
-	hostInData, hostW = data.get(), embedder.W.get()
-	hostOutData = np.zeros(embedder.data.shape, dtype=np.float32)
+	hostW = embedder.W.get()
+	hostOutData = np.zeros(embedder.data.shape, dtype=dtype)
 
 	for b in range(batchsize):
 		for s in range(sentlength):
-			wordidx = int(hostInData[b, s])
+			wordidx = int(hostData[b, s])
 
 			if wordidx != -1:
 				hostOutData[b, s] = hostW[wordidx]
@@ -194,28 +219,28 @@ def calcTest():
 	assert embedder.getVocabulary() == {}
 	assert np.allclose(hostOutData, embedder.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*embedder.data.shape).astype(np.float32))
+	hostGrad = np.random.randn(*embedder.data.shape).astype(dtype)
+	grad = gpuarray.to_gpu(hostGrad)
+
 	embedder.backward(grad)
 
 	learnRate = 1e-1
 	embedder.updateParams(learnRate)
 
-	hostGrad = grad.get()
 	for b in range(batchsize):
 		for s in range(sentlength):
-			wordidx = int(hostInData[b, s])
+			wordidx = int(hostData[b, s])
 
 			if wordidx != -1:
 				hostW[wordidx] += learnRate * hostGrad[b, s]
 
-	assert np.allclose(hostW, embedder.W.get())
+	assert np.allclose(hostW, embedder.W.get(), atol=atol)
 
 	embedder.save("../TestData/embedder.hdf")
 	embedder = Embedder(vocabsize, sentlength, embsize)
 	embedder.load("../TestData/embedder.hdf")
 
-	assert np.allclose(hostW, embedder.W.get())
-
+	assert np.allclose(hostW, embedder.W.get(), atol=atol)
 	os.remove("../TestData/embedder.hdf")
 
 
@@ -223,11 +248,10 @@ def verifyDataTest():
 	batchsize, sentlength, embsize = 10, 20, 40
 	vocabsize = 1000
 
-	data = np.random.randint(low=-1, high=vocabsize, size=(batchsize, sentlength), dtype=np.int32)
-	data[-1, -1] = vocabsize
+	hostData = np.random.randint(low=-1, high=vocabsize, size=(batchsize, sentlength), dtype=np.int32)
+	hostData[-1, -1] = vocabsize
 
-	data = gpuarray.to_gpu(data)
-
+	data = gpuarray.to_gpu(hostData)
 	embedder = Embedder(vocabsize, sentlength, embsize)
 
 	Config.verifyData = True

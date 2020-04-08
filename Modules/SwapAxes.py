@@ -1,7 +1,5 @@
 import numpy as np
 
-from PuzzleLib import Config
-
 from PuzzleLib.Backend import gpuarray, Memory
 from PuzzleLib.Backend.Utils import dtypesSupported
 

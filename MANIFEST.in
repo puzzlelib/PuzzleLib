@@ -1,0 +1,7 @@
+global-exclude .gitignore
+
+exclude MANIFEST.in
+
+include *.py
+include LICENSE
+include requirements.txt

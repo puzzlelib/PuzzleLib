@@ -92,11 +92,9 @@ def checkRuntime(name, compiler, download, envpath):
 		version = subprocess.getoutput("%s --version" % compiler).split()[-1]
 
 	except Exception as e:
-		print("%s%s is not found with error:%s\n%s" % (Fore.RED, name, Style.RESET_ALL, e))
-		print("Download and install appropriate version from %s" % download)
-
-		print("Exiting ...")
-		sys.exit(1)
+		error = "%s%s is not found with error(s):%s\n%s" % (Fore.RED, name, Style.RESET_ALL, e)
+		note = "Download and install appropriate version from %s" % download
+		raise RuntimeError("%s\n%s" % (error, note))
 
 	print("%s%s %s and SDK libraries are found!%s" % (Fore.LIGHTGREEN_EX, name, version, Style.RESET_ALL))
 	print("Continuing ...", end="\n\n")
@@ -108,10 +106,9 @@ def checkRuntime(name, compiler, download, envpath):
 	RUNTIME_PATH = os.environ.get(envpath, None)
 
 	if RUNTIME_PATH is None:
-		print("%s%s is not set - set it to CUDA installation path!%s" % (Fore.RED, envpath, Style.RESET_ALL))
-
-		print("Exiting ...")
-		sys.exit(1)
+		raise RuntimeError(
+			"%s%s is not set - set it to CUDA installation path!%s" % (Fore.RED, envpath, Style.RESET_ALL)
+		)
 
 	print("%s%s is set!%s" % (Fore.LIGHTGREEN_EX, envpath, Style.RESET_ALL))
 	print("Continuing ...", end="\n\n")
@@ -136,12 +133,9 @@ def checkCompiler(name, compiler, kernel, ext):
 			print("Continuing ...", end="\n\n")
 
 		except subprocess.CalledProcessError as e:
-			print("%s%s failed compiling test kernel with error:%s\n%s" % (
+			raise RuntimeError("%s%s failed compiling test kernel with error(s):%s\n%s" % (
 				Fore.RED, compiler, Style.RESET_ALL, e.output.decode("utf-8")
 			))
-
-			print("Exiting ...")
-			sys.exit(1)
 
 	finally:
 		os.remove(temp.name)
@@ -155,10 +149,9 @@ def checkCompiler(name, compiler, kernel, ext):
 		)
 
 	except subprocess.CalledProcessError as e:
-		print("%sTest kernel failed with error:%s %s" % (Fore.RED, Style.RESET_ALL, e.stderr.decode("utf-8")))
-
-		print("Exiting ...")
-		sys.exit(1)
+		raise RuntimeError(
+			"%sTest kernel failed with error:%s %s" % (Fore.RED, Style.RESET_ALL, e.stderr.decode("utf-8"))
+		)
 
 	finally:
 		os.remove(exefile)
@@ -175,18 +168,18 @@ def checkPipPackages():
 	except subprocess.CalledProcessError:
 		pip = "pip"
 
-	installed = subprocess.check_output([pip, "list", "freeze"]).decode("utf-8")
-	installed = {k: v for k, v in map(lambda s: s.split(), installed.splitlines())}
+	installed = subprocess.check_output([pip, "list", "--format=freeze"]).decode("utf-8")
+	installed = {k: v for k, v in map(lambda s: s.split(sep="=="), installed.splitlines())}
 
 	for package in packages:
-		print("%sChecking package '%s' installation ...%s" % (Fore.LIGHTBLUE_EX, package, Style.RESET_ALL))
+		print("%sChecking %s installation ...%s" % (Fore.LIGHTBLUE_EX, package, Style.RESET_ALL))
 		version = installed.get(package, None)
 
 		if version is None:
-			print("%sPackage '%s' is not installed%s\n" % (Fore.YELLOW, package, Style.RESET_ALL))
+			print("%s%s is not installed%s\n" % (Fore.YELLOW, package, Style.RESET_ALL))
 
 			try:
-				print("%sInstalling package %s ...%s" % (Fore.LIGHTBLUE_EX, package, Style.RESET_ALL))
+				print("%sInstalling %s ...%s" % (Fore.LIGHTBLUE_EX, package, Style.RESET_ALL))
 				cmd = [pip, "install"]
 
 				if sys.platform != "win32":
@@ -196,29 +189,39 @@ def checkPipPackages():
 				print(result.decode("utf-8"))
 
 			except subprocess.CalledProcessError as e:
-				print("%sPackage '%s' installation error:%s\n%s" % (
-					Fore.RED, package, Style.RESET_ALL, e.output.decode("utf-8")
-				))
-
-				print("Exiting ...")
-				sys.exit(1)
+				raise RuntimeError(
+					"%s%s installation error:%s\n%s" % (Fore.RED, package, Style.RESET_ALL, e.output.decode("utf-8"))
+				)
 
 		else:
-			print("%sFound package '%s' == %s%s" % (Fore.LIGHTGREEN_EX, package, version, Style.RESET_ALL))
+			print("%sFound package %s==%s%s" % (Fore.LIGHTGREEN_EX, package, version, Style.RESET_ALL))
 
 		print("Continuing ...", end="\n\n")
 
 
-def main():
+def checkCudaInstall(withPip):
 	checkRuntime(
 		name="CUDA", compiler="nvcc", download="https://developer.nvidia.com/cuda-downloads", envpath="CUDA_PATH"
 	)
 	checkCompiler(
 		name="CUDA", compiler="nvcc", kernel=cudaTestKernel, ext=".cu"
 	)
-	checkPipPackages()
+
+	if withPip:
+		checkPipPackages()
 
 	print("%sAll done, exiting ...%s" % (Fore.LIGHTGREEN_EX, Style.RESET_ALL))
+
+
+def main():
+	try:
+		checkCudaInstall(withPip=True)
+
+	except RuntimeError as e:
+		print(e)
+
+		print("Exiting ...")
+		sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -2,11 +2,11 @@ from enum import Enum
 
 import numpy as np
 
+from PuzzleLib.Cuda.Wrappers.CuDnnRnn import reluTest, tanhTest, lstmTest, gruTest
+
 from PuzzleLib.Hip.Driver import GPUArray
 from PuzzleLib.Hip.ThirdParty import libmiopen
 from PuzzleLib.Hip.Wrappers.MIOpen import toDataType
-
-from PuzzleLib.Cuda.Wrappers.CuDnnRnn import reluTest, tanhTest, lstmTest, gruTest
 
 
 class RNNMode(Enum):

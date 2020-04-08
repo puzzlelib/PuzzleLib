@@ -33,10 +33,7 @@ class BatchNorm(Module):
 		if empty:
 			return
 
-		if not affine:
-			sscale = 0
-
-		scale = np.random.normal(1.0, sscale, (1, size, 1, 1)).astype(np.float32)
+		scale = np.random.normal(1.0, sscale if affine else 0.0, (1, size, 1, 1)).astype(np.float32)
 		var = np.ones((1, size, 1, 1), dtype=np.float32)
 
 		self.setVar("scale", Variable(gpuarray.to_gpu(scale)))
@@ -56,12 +53,16 @@ class BatchNorm(Module):
 			self.numOfProps += 1
 			factor = max(self.initFactor / self.numOfProps, self.minFactor)
 
-			self.data, self.savemean, self.saveinvvar = batchNormNd(indata, self.scale, self.bias, self.mean, self.var,
-																	self.epsilon, factor, False,
-																	BatchNormMode.perActivation)
+			self.data, self.savemean, self.saveinvvar = batchNormNd(
+				indata, self.scale, self.bias, self.mean, self.var, self.epsilon, factor, False,
+				BatchNormMode.perActivation
+			)
+
 		else:
-			self.data = batchNormNd(indata, self.scale, self.bias, self.mean, self.var, self.epsilon, 0, True,
-									BatchNormMode.perActivation, out=indata if self.inplace else None)
+			self.data = batchNormNd(
+				indata, self.scale, self.bias, self.mean, self.var, self.epsilon, 0, True,
+				BatchNormMode.perActivation, out=indata if self.inplace else None
+			)
 
 		self.data = self.data.reshape(*data.shape)
 
@@ -70,8 +71,9 @@ class BatchNorm(Module):
 		data = self.inData.reshape(self.inData.shape[0], self.size, 1, 1)
 		outgrad = grad.reshape(grad.shape[0], self.size, 1, 1)
 
-		tup = batchNormNdBackward(data, outgrad, self.scale, self.savemean, self.saveinvvar, self.epsilon,
-								  mode=BatchNormMode.perActivation)
+		tup = batchNormNdBackward(
+			data, outgrad, self.scale, self.savemean, self.saveinvvar, self.epsilon, mode=BatchNormMode.perActivation
+		)
 
 		if self.affine:
 			self.grad, self.scalegrad, self.biasgrad = tup
@@ -83,10 +85,14 @@ class BatchNorm(Module):
 
 	def accGradParams(self, grad, scale=1.0, momentum=0.0):
 		if self.affine:
-			Blas.addVectorToVector(self.scalegrad.ravel(), self.vars["scale"].grad.ravel(),
-								   out=self.vars["scale"].grad.ravel(), alpha=scale, beta=momentum)
-			Blas.addVectorToVector(self.biasgrad.ravel(), self.vars["bias"].grad.ravel(),
-								   out=self.vars["bias"].grad.ravel(), alpha=scale, beta=momentum)
+			Blas.addVectorToVector(
+				self.scalegrad.ravel(), self.vars["scale"].grad.ravel(),
+				out=self.vars["scale"].grad.ravel(), alpha=scale, beta=momentum
+			)
+			Blas.addVectorToVector(
+				self.biasgrad.ravel(), self.vars["bias"].grad.ravel(),
+				out=self.vars["bias"].grad.ravel(), alpha=scale, beta=momentum
+			)
 
 
 	def dataShapeFrom(self, shape):
@@ -119,6 +125,17 @@ class BatchNorm(Module):
 
 		if self.affine:
 			self.scalegrad, self.biasgrad = None, None
+
+
+	def calcMode(self, T):
+		if Config.backend == Config.Backend.cuda:
+			if T not in {np.float16, np.float32}:
+				raise ModuleError("Unsupported dtype %s" % T)
+
+		elif T != np.float32:
+			raise ModuleError("Unsupported dtype %s" % T)
+
+		self.calctype = T
 
 
 def unittest():

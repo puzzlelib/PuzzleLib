@@ -14,46 +14,25 @@ class SoftMax(Module):
 
 
 	def updateData(self, data):
-		if data.ndim == 2:
-			indata = data.reshape(*data.shape, 1, 1)
-		else:
-			indata = data
+		shape = data.shape
+		ndim = max(0, 4 - len(shape))
 
-		self.data = softmaxNd(indata)
-
-		if data.ndim == 2:
-			self.data = self.data.reshape(*self.data.shape[:2])
+		data = data.reshape(shape + tuple(1 for _ in range(ndim)))
+		self.data = softmaxNd(data).reshape(shape)
 
 
 	def updateGrad(self, grad):
-		if grad.ndim == 2:
-			ingrad = grad.reshape(*grad.shape, 1, 1)
-		else:
-			ingrad = grad
+		shape = grad.shape
+		ndim = max(0, 4 - len(shape))
 
-		if self.data.ndim == 2:
-			indata = self.data.reshape(*self.data.shape, 1, 1)
-		else:
-			indata = self.data
+		grad = grad.reshape(shape + tuple(1 for _ in range(ndim)))
+		data = self.data.reshape(shape + tuple(1 for _ in range(ndim)))
 
-		self.grad = softmaxNdBackward(indata, ingrad)
-
-		if grad.ndim == 2:
-			self.grad = self.grad.reshape(*self.grad.shape[:2])
-
-
-	def checkDataShape(self, shape):
-		if len(shape) != 4 and len(shape) != 2:
-			raise ModuleError("Data must be 4d or 2d tensor")
+		self.grad = softmaxNdBackward(data, grad).reshape(shape)
 
 
 	def dataShapeFrom(self, shape):
 		return shape
-
-
-	def checkGradShape(self, shape):
-		if len(shape) != 4 and len(shape) != 2:
-			raise ModuleError("Grad must be 4d or 2d tensor")
 
 
 	def gradShapeFrom(self, shape):
@@ -71,7 +50,9 @@ class SoftMax(Module):
 
 def unittest():
 	batchsize, maps = 2, 3
-	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, 1, 1).astype(np.float32))
+
+	hostData = np.random.randn(batchsize, maps, 1).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	softmax = SoftMax()
 	softmax(data)
@@ -81,14 +62,17 @@ def unittest():
 		p = e / np.sum(e)
 		return p
 
-	hostData = data.get().reshape(batchsize, maps).astype(np.float32)
+	hostData = hostData.reshape(batchsize, maps).astype(np.float32)
+
 	hostOutData = np.vstack([softMaxForward(hostData[i]) for i in range(batchsize)])
 	assert np.allclose(hostOutData, softmax.data.get().reshape(batchsize, maps).astype(np.float32))
 
-	grad = gpuarray.to_gpu(np.random.randn(batchsize, maps, 1, 1).astype(np.float32))
-	softmax.backward(grad)
+	hostGrad = np.random.randn(batchsize, maps, 1, 1).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostGrad = grad.get().reshape(batchsize, maps).astype(np.float32)
+	softmax.backward(grad)
+	hostGrad = hostGrad.reshape(batchsize, maps).astype(np.float32)
+
 	def softMaxBackward(outdata, gr):
 		ingrad = np.zeros(outdata.shape, dtype=np.float32)
 		for i in range(ingrad.shape[0]):
