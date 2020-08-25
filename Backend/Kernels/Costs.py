@@ -45,7 +45,7 @@ def initHip():
 
 
 def initGPU(Backend, CTC):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, costmod, ctcmod = backend.memoryPool, backend.costmod, backend.ctcmod
 
 	global bceKer, hingeKer, smoothL1Ker, l1HingeKer, getAccuracyKernel

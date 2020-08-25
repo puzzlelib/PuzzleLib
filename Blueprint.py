@@ -2,7 +2,7 @@ import json, os, importlib.util
 
 import numpy as np
 
-from PuzzleLib.Config import libname
+from PuzzleLib import Config
 from PuzzleLib.Backend import gpuarray
 
 from PuzzleLib.Modules.Module import Module
@@ -42,13 +42,11 @@ class BlueprintFactory:
 					factory[name] = getattr(mod, name)
 
 
-	def build(self, blueprint, log=False, logwidth=20):
-		classname = blueprint["classname"]
-		scheme = blueprint["scheme"]
+	def build(self, blueprint, log=False):
+		classname, scheme = blueprint["classname"], blueprint["scheme"]
 
 		if classname in self.containers:
-			graph = blueprint["graph"]
-			elements = blueprint["modules"]
+			graph, elements = blueprint["graph"], blueprint["modules"]
 
 			if classname in {"Sequential", "Parallel"}:
 				mod = self.containers[classname](name=scheme["name"])
@@ -59,6 +57,7 @@ class BlueprintFactory:
 
 			elif classname == "Graph":
 				nodes = {name: Node(self.build(bprint, log=log)) for name, bprint in elements.items()}
+
 				for node in nodes.values():
 					node.addBackwards([(nodes[name], slots) for name, slots in graph[node.name]])
 
@@ -71,37 +70,31 @@ class BlueprintFactory:
 				raise NotImplementedError(classname)
 
 		elif classname in self.modules:
-			cl = self.modules[classname]
-
-			if log:
-				fmt = "[%s] Loading module named %-" + str(logwidth) + "s type %-" + str(logwidth) + "s ..."
-				print(fmt % (libname, "'%s'" % scheme["name"], classname), end="")
-
 			if "initscheme" in scheme:
 				scheme["initscheme"] = "none"
 
-			mod = cl(**scheme)
-
-			if log:
-				print(" Done")
+			mod = self.modules[classname](**scheme)
 
 		else:
 			raise BlueprintError("Cannot build module with class name '%s'" % classname)
 
+		if log:
+			Config.getLogger().info("Loaded %s", mod)
+
 		return mod
 
 
-def load(hdf, name=None, assumeUniqueNames=False, log=False, logwidth=20):
+def load(hdf, name=None, assumeUniqueNames=False, log=False):
 	with Module.ensureHdf(hdf, "r") as hdf:
 		blueprint = json.loads(str(np.array(hdf["blueprint"])))
 
 		if log:
-			print("[%s] Building model from blueprint ..." % libname)
+			Config.getLogger().info("Building model from blueprint ...")
 
-		mod = BlueprintFactory().build(blueprint, log=log, logwidth=logwidth)
+		mod = BlueprintFactory().build(blueprint, log=log)
 
 		if log:
-			print("[%s] Loading model data ..." % libname)
+			Config.getLogger().info("Loading model data ...")
 
 		mod.load(hdf, name=name, assumeUniqueNames=assumeUniqueNames)
 

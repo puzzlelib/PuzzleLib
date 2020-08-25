@@ -145,7 +145,11 @@ class DnnContext:
 
 
 	def __del__(self):
-		libmiopen.miopenDestroy(self.context)
+		try:
+			libmiopen.miopenDestroy(self.context)
+
+		except AttributeError:
+			pass
 
 
 	@staticmethod
@@ -221,14 +225,15 @@ class DnnContext:
 
 
 	@staticmethod
-	def getConvNdInShape(descConv, descTensor, descW):
+	def getConvNdInShape(descConv, descTensor, descW, postpad=0):
+		postpad = tuple(postpad for _ in range(len(descConv.pad))) if isinstance(postpad, int) else postpad
 		fsize = descW.shape[2:]
 
 		stride, pad, dilation = descConv.stride, descConv.pad, descConv.dilation
 		groups = descConv.groups
 
 		shape = tuple(
-			stride[d] * (descTensor.shape[d + 2] - 1) + dilation[d] * (fsize[d] - 1) - 2 * pad[d] + 1
+			stride[d] * (descTensor.shape[d + 2] - 1) + dilation[d] * (fsize[d] - 1) - 2 * pad[d] + 1 + postpad[d]
 			for d in range(len(descConv.pad))
 		)
 
@@ -360,7 +365,7 @@ class DnnContext:
 		return out
 
 
-	def convNdBackwardData(self, grad, W, bias=None, data=None, stride=1, pad=0, dilation=1, groups=1,
+	def convNdBackwardData(self, grad, W, bias=None, data=None, stride=1, pad=0, dilation=1, postpad=0, groups=1,
 						   algo=ConvBwdDataAlgo.auto.value, out=None, allocator=None):
 		assert grad.ndim == W.ndim and grad.shape[1] == W.shape[0]
 
@@ -368,7 +373,7 @@ class DnnContext:
 		descW = self.createDescribedNdTensor(W)
 
 		descConv = self.createDescribedConvNd(W.ndim, stride, pad, dilation, groups)
-		inshape = self.getConvNdInShape(descConv, descGrad, descW) if data is None else data.shape
+		inshape = self.getConvNdInShape(descConv, descGrad, descW, postpad) if data is None else data.shape
 
 		out = GPUArray.empty(inshape, dtype=grad.dtype, allocator=allocator) if out is None else out
 		descInGrad = self.createDescribedNdTensor(out)

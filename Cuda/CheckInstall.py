@@ -85,7 +85,7 @@ exit:
 """
 
 
-def checkRuntime(name, compiler, download, envpath):
+def checkInstall(name, compiler, download, envpath):
 	print("%sChecking %s installation ...%s" % (Fore.LIGHTBLUE_EX, name, Style.RESET_ALL))
 
 	try:
@@ -114,7 +114,7 @@ def checkRuntime(name, compiler, download, envpath):
 	print("Continuing ...", end="\n\n")
 
 
-def checkCompiler(name, compiler, kernel, ext):
+def checkRuntime(name, compiler, kernel, ext):
 	print("%sChecking %s compiler ...%s" % (Fore.LIGHTBLUE_EX, compiler.upper(), Style.RESET_ALL))
 
 	temp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=ext, delete=False)
@@ -199,13 +199,13 @@ def checkPipPackages():
 		print("Continuing ...", end="\n\n")
 
 
-def checkCudaInstall(withPip):
-	checkRuntime(
+def checkCudaInstall(withRuntime, withPip):
+	checkInstall(
 		name="CUDA", compiler="nvcc", download="https://developer.nvidia.com/cuda-downloads", envpath="CUDA_PATH"
 	)
-	checkCompiler(
-		name="CUDA", compiler="nvcc", kernel=cudaTestKernel, ext=".cu"
-	)
+
+	if withRuntime:
+		checkRuntime(name="CUDA", compiler="nvcc", kernel=cudaTestKernel, ext=".cu")
 
 	if withPip:
 		checkPipPackages()
@@ -215,7 +215,7 @@ def checkCudaInstall(withPip):
 
 def main():
 	try:
-		checkCudaInstall(withPip=True)
+		checkCudaInstall(withRuntime=True, withPip=True)
 
 	except RuntimeError as e:
 		print(e)

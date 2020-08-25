@@ -3,8 +3,8 @@ from enum import Enum
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels import Pad
-from PuzzleLib.Backend.Utils import dtypesSupported, memoryPool as memPool
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 
@@ -48,7 +48,7 @@ class Pad2D(Module):
 			height, width = grad.shape[2:]
 			upad, bpad, lpad, rpad = self.pad
 
-			self.grad = grad[:, :, upad:height - bpad, lpad:width - rpad].copy()
+			self.grad = grad[:, :, upad:height - bpad, lpad:width - rpad].copy(allocator=memPool)
 
 		elif self.mode == PadMode.reflect:
 			self.grad = Pad.reflectpad2dBackward(grad, self.pad)
@@ -91,7 +91,7 @@ class Pad2D(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)

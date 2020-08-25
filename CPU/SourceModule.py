@@ -3,6 +3,8 @@ from string import Template
 
 import numpy as np
 
+from PuzzleLib import Config
+
 from PuzzleLib.Compiler.Codegen.Types import PointerType, void_t, ptrdiff_t, float_t, double_t
 from PuzzleLib.Compiler.Codegen.Types import int8_t, int16_t, int32_t, int64_t
 from PuzzleLib.Compiler.Codegen.Types import uint8_t, uint16_t, uint32_t, uint64_t
@@ -91,22 +93,22 @@ class SourceModule:
 
 
 	def build(self):
-		if self.mod is None:
-			modname = "module"
-			source = self.generateSource(modname)
+		if self.mod is not None:
+			return
 
-			toolchain = guessToolchain(verbose=1).withOptimizationLevel(
-				level=0 if self.debug else 4,
-				debuglevel=3 if self.debug else 0
-			).addLibrary("numpy", [np.get_include()], [], [])
+		modname = "module"
+		source = self.generateSource(modname)
 
-			if sys.platform != "win32":
-				toolchain = toolchain.addLibrary("math", [], [], ["m"])
+		toolchain = guessToolchain(verbose=1).withOptimizationLevel(
+			level=0 if self.debug else 4,
+			debuglevel=3 if self.debug else 0
+		).addLibrary("numpy", [np.get_include()], [], [])
 
-			from PuzzleLib.Config import libname, Backend
-			cachepath = os.path.join(libname, Backend.cpu.name)
+		if sys.platform != "win32":
+			toolchain = toolchain.addLibrary("math", [], [], ["m"])
 
-			self.mod = extensionFromString(toolchain, modname, source, cachepath=cachepath, cleanup=False)
+		cachepath = os.path.join(Config.libname, Config.Backend.cpu.name)
+		self.mod = extensionFromString(toolchain, modname, source, cachepath=cachepath, cleanup=False)
 
 
 	def getFunction(self, name):

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <assert.h>
+#include <stdbool.h>
+
 #define TO_STRING(s) #s
 
 

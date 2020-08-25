@@ -30,7 +30,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, embedmod = backend.memoryPool, backend.embedmod
 
 	def wrapEmbed(data, W):

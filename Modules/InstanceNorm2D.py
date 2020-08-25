@@ -2,9 +2,8 @@ import numpy as np
 
 from PuzzleLib import Config
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend import Blas
-from PuzzleLib.Backend.Dnn.InstanceNorm import instanceNorm2d, instanceNorm2dBackward
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.Dnn import instanceNorm2d, instanceNorm2dBackward
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -100,12 +99,14 @@ class InstanceNorm2D(Module):
 
 def unittest():
 	batchsize, maps, h, w = 5, 3, 4, 4
-	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, h, w).astype(np.float32))
+
+	hostData = np.random.randn(batchsize, maps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	instNorm2d = InstanceNorm2D(maps, affine=True)
 	instNorm2d(data)
 
-	hostData = data.get().reshape(data.shape[0] * data.shape[1], -1)
+	hostData = hostData.reshape(data.shape[0] * data.shape[1], -1)
 	hostVar = np.var(hostData, axis=1)
 	hostInvVar = np.ones(hostData.shape[0], dtype=np.float32) / np.sqrt(hostVar + instNorm2d.epsilon)
 	hostOutData = (hostData - np.mean(hostData, axis=1, keepdims=True)) * hostInvVar[:, np.newaxis]

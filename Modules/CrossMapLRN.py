@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.Basic import crossMapLRN, crossMapLRNBackward
+from PuzzleLib.Backend.Dnn import crossMapLRN, crossMapLRNBackward
 
 from PuzzleLib.Modules.LRN import LRN
 

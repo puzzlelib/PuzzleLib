@@ -80,10 +80,7 @@ Cuda_GPUArray *CuDnn_enforceAllocated(Cuda_GPUArray *out, Cuda_MemoryPool *alloc
 	if (out == NULL)
 	{
 		Cuda_ArraySpec spec;
-		Cuda_fillShapeAsContiguous(spec.shape, spec.strides, shape, ndim, Cuda_dtypeSize(dtype));
-
-		spec.ndim = ndim, spec.size = spec.strides[0] * spec.shape[0] / Cuda_dtypeSize(dtype);
-		spec.dtype = dtype, spec.contiguous = true;
+		Cuda_ArraySpec_initAsContiguous(&spec, shape, ndim, dtype);
 
 		out = Cuda_GPUArray_newWithAllocator(allocator, NULL, &spec);
 		if (out == NULL)
@@ -119,8 +116,14 @@ Cuda_GPUArray *CuDnn_enforceAllocated(Cuda_GPUArray *out, Cuda_MemoryPool *alloc
 
 	if (zeroOut)
 	{
-		assert(out->contiguous);
-		CU_CHECK(cuMemsetD8((CUdeviceptr)out->gpudata->ptr, 0x00, out->size * Cuda_dtypeSize(out->dtype)), goto error);
+		if (!out->contiguous)
+		{
+			PyErr_SetString(PyExc_ValueError, "output gpuarray is not contiguous");
+			goto error;
+		}
+
+		if (!Cuda_Buffer_fillD8(out->gpudata, 0, CUDA_GPUARRAY_NBYTES(out), NULL))
+			goto error;
 	}
 
 	return out;
@@ -218,7 +221,7 @@ inline static bool CuDnn_describeFilter(cudnnFilterDescriptor_t *desc, const Cud
 
 typedef struct CuDnn_ConvParams
 {
-	size_t stride[GPUTENSOR_DIM_MAX - 2], pad[GPUTENSOR_DIM_MAX - 2], dilation[GPUTENSOR_DIM_MAX - 2];
+	size_t stride[GPUTENSOR_MAP_MAX], pad[GPUTENSOR_MAP_MAX], dilation[GPUTENSOR_MAP_MAX];
 	size_t groups, ndim;
 }
 CuDnn_ConvParams;
@@ -264,7 +267,7 @@ inline static bool CuDnn_convNd_outshape(size_t *outshape, CuDnn_ConvParams para
 
 
 inline static bool CuDnn_convNd_inshape(size_t *inshape, CuDnn_ConvParams params,
-										const size_t *outshape, const size_t *Wshape)
+										const size_t *outshape, const size_t *Wshape, const size_t *postpad)
 {
 	if (outshape[1] != Wshape[0])
 	{
@@ -273,16 +276,16 @@ inline static bool CuDnn_convNd_inshape(size_t *inshape, CuDnn_ConvParams params
 	}
 
 	for (size_t i = 0; i < params.ndim; i += 1)
-		inshape[2 + i] = params.stride[i] * (outshape[2 + i] - 1) +
-						 params.dilation[i] * (Wshape[2 + i] - 1) - 2 * params.pad[i] + 1;
+		inshape[2 + i] = params.stride[i] * (outshape[2 + i] - 1) + params.dilation[i] * (Wshape[2 + i] - 1) -
+						 2 * params.pad[i] + 1 + postpad[i];
 
 	inshape[0] = outshape[0], inshape[1] = Wshape[1] * params.groups;
 	return true;
 }
 
 
-inline static bool CuDnn_convNd_isMapFullyCovered(bool *isCovered, size_t *inshape, CuDnn_ConvParams params,
-												  const Cuda_GPUArray *tensor, size_t batchsize, const size_t *Wshape)
+inline static bool CuDnn_convNd_validateInShape(size_t *inshape, CuDnn_ConvParams params,
+												const Cuda_GPUArray *tensor, size_t batchsize, const size_t *Wshape)
 {
 	const size_t *shape = CUDA_GPUARRAY_SHAPE(tensor);
 
@@ -301,7 +304,6 @@ inline static bool CuDnn_convNd_isMapFullyCovered(bool *isCovered, size_t *insha
 	}
 
 	inshape[1] = shape[1];
-	bool covered = true;
 
 	for (size_t i = 0; i < params.ndim; i += 1)
 	{
@@ -313,13 +315,9 @@ inline static bool CuDnn_convNd_isMapFullyCovered(bool *isCovered, size_t *insha
 			return false;
 		}
 
-		if ((size - fsize) % params.stride[i] != 0)
-			covered = false;
-
 		inshape[i + 2] = shape[i + 2];
 	}
 
-	*isCovered = covered;
 	return true;
 }
 
@@ -330,7 +328,7 @@ inline static bool CuDnn_Context_describeConv(CuDnn_Context *self, cudnnConvolut
 	CUDNN_CHECK(cudnnCreateConvolutionDescriptor(desc), goto error_1);
 
 	assert(CuDnn_isValidDim(params.ndim + 2));
-	int strideA[GPUTENSOR_DIM_MAX - 2], padA[GPUTENSOR_DIM_MAX - 2], dilationA[GPUTENSOR_DIM_MAX - 2];
+	int strideA[GPUTENSOR_MAP_MAX], padA[GPUTENSOR_MAP_MAX], dilationA[GPUTENSOR_MAP_MAX];
 
 	for (size_t i = 0; i < params.ndim; i += 1)
 		strideA[i] = (int)params.stride[i], padA[i] = (int)params.pad[i], dilationA[i] = (int)params.dilation[i];
@@ -407,10 +405,10 @@ inline static bool CuDnn_Context_convNd(CuDnn_Context *self, const Cuda_GPUArray
 	cudnnFilterDescriptor_t wDesc;
 	cudnnConvolutionDescriptor_t convDesc;
 
-	if (!CuDnn_describeTensor(&dataDesc, data))                goto error_1;
-	if (!CuDnn_describeTensor(&outDesc, out))                  goto error_2;
-	if (!CuDnn_describeFilter(&wDesc, W))                      goto error_3;
-	if (!CuDnn_Context_describeConv(self, &convDesc, params))  goto error_4;
+	if (!CuDnn_describeTensor(&dataDesc, data))               goto error_1;
+	if (!CuDnn_describeTensor(&outDesc, out))                 goto error_2;
+	if (!CuDnn_describeFilter(&wDesc, W))                     goto error_3;
+	if (!CuDnn_Context_describeConv(self, &convDesc, params)) goto error_4;
 
 	size_t size;
 	CUDNN_CHECK(cudnnGetConvolutionForwardWorkspaceSize(
@@ -528,10 +526,10 @@ inline static bool CuDnn_Context_convNdBackwardData(CuDnn_Context *self, const C
 	cudnnFilterDescriptor_t wDesc;
 	cudnnConvolutionDescriptor_t convDesc;
 
-	if (!CuDnn_describeTensor(&gradDesc, grad))                goto error_1;
-	if (!CuDnn_describeTensor(&outDesc, out))                  goto error_2;
-	if (!CuDnn_describeFilter(&wDesc, W))                      goto error_3;
-	if (!CuDnn_Context_describeConv(self, &convDesc, params))  goto error_4;
+	if (!CuDnn_describeTensor(&gradDesc, grad))               goto error_1;
+	if (!CuDnn_describeTensor(&outDesc, out))                 goto error_2;
+	if (!CuDnn_describeFilter(&wDesc, W))                     goto error_3;
+	if (!CuDnn_Context_describeConv(self, &convDesc, params)) goto error_4;
 
 	size_t size;
 	CUDNN_CHECK(cudnnGetConvolutionBackwardDataWorkspaceSize(
@@ -575,24 +573,24 @@ error_1:
 
 PyDoc_STRVAR(
 	CuDnn_Context_pyConvNdBackwardData_doc,
-	"convNdBackwardData(self, grad, W, bias=None, data=None, stride=1, pad=0, dilation=1, groups=1, "
+	"convNdBackwardData(self, grad, W, bias=None, data=None, stride=1, pad=0, dilation=1, postpad=0, groups=1, "
 	"algo=" CUDNN_BACKEND_NAME ".CONV_BWD_DATA_ALGO_0, out=None, allocator=None) -> " CUDA_GPUARRAY_FULLNAME
 );
 static PyObject *CuDnn_Context_pyConvNdBackwardData(PyObject *self, PyObject *args, PyObject *kwds)
 {
 	const char *kwlist[] = {
-		"grad", "W", "bias", "data", "stride", "pad", "dilation", "groups", "algo", "out", "allocator", NULL
+		"grad", "W", "bias", "data", "stride", "pad", "dilation", "postpad", "groups", "algo", "out", "allocator", NULL
 	};
 
 	Cuda_GPUArray *grad, *W;
-	PyObject *pystride = NULL, *pypad = NULL, *pydil = NULL;
+	PyObject *pystride = NULL, *pypad = NULL, *pydil = NULL, *pypostpad = NULL;
 
 	int groups = 1, algo = CUDNN_CONVOLUTION_BWD_DATA_ALGO_0;
 	PyObject *pybias = NULL, *pydata = NULL, *pyout = NULL, *pyalloc = NULL;
 
 	if (!PyArg_ParseTupleAndKeywords(
-		args, kwds, "O!O!|OOOOOiiOO", (char **)kwlist, Cuda_GPUArray_Type, &grad, Cuda_GPUArray_Type, &W,
-		&pybias, &pydata, &pystride, &pypad, &pydil, &groups, &algo, &pyout, &pyalloc
+		args, kwds, "O!O!|OOOOOOiiOO", (char **)kwlist, Cuda_GPUArray_Type, &grad, Cuda_GPUArray_Type, &W,
+		&pybias, &pydata, &pystride, &pypad, &pydil, &pypostpad, &groups, &algo, &pyout, &pyalloc
 	))
 		return NULL;
 
@@ -620,20 +618,23 @@ static PyObject *CuDnn_Context_pyConvNdBackwardData(PyObject *self, PyObject *ar
 	if (!CuDnn_unpackConvParams(pystride, pypad, pydil, groups, grad->ndim - 2, &params))
 		return NULL;
 
-	bool isMapCovered = true;
-
 	const size_t *gradshape = CUDA_GPUARRAY_SHAPE(grad), *Wshape = CUDA_GPUARRAY_SHAPE(W);
 	size_t inshape[GPUTENSOR_DIM_MAX];
 
 	if (data == NULL)
 	{
-		if (!CuDnn_convNd_inshape(inshape, params, gradshape, Wshape))
+		size_t postpad[GPUTENSOR_MAP_MAX];
+
+		if (!CuDnn_unpackIntSequence(pypostpad, postpad, grad->ndim - 2, 0, "postpad"))
+			return NULL;
+
+		if (!CuDnn_convNd_inshape(inshape, params, gradshape, Wshape, postpad))
 			return NULL;
 	}
-	else if (!CuDnn_convNd_isMapFullyCovered(&isMapCovered, inshape, params, data, gradshape[0], Wshape))
+	else if (!CuDnn_convNd_validateInShape(inshape, params, data, gradshape[0], Wshape))
 		return NULL;
 
-	out = CuDnn_enforceAllocated(out, allocator, inshape, grad->ndim, grad->dtype, !isMapCovered);
+	out = CuDnn_enforceAllocated(out, allocator, inshape, grad->ndim, grad->dtype, false);
 	if (out == NULL) return NULL;
 
 	if (!CuDnn_Context_convNdBackwardData(
@@ -660,10 +661,10 @@ inline static bool CuDnn_Context_convNdBackwardParams(CuDnn_Context *self, const
 	cudnnFilterDescriptor_t wDesc;
 	cudnnConvolutionDescriptor_t convDesc;
 
-	if (!CuDnn_describeTensor(&dataDesc, data))                goto error_1;
-	if (!CuDnn_describeTensor(&gradDesc, grad))                goto error_2;
-	if (!CuDnn_describeFilter(&wDesc, wgrad))                  goto error_3;
-	if (!CuDnn_Context_describeConv(self, &convDesc, params))  goto error_4;
+	if (!CuDnn_describeTensor(&dataDesc, data))               goto error_1;
+	if (!CuDnn_describeTensor(&gradDesc, grad))               goto error_2;
+	if (!CuDnn_describeFilter(&wDesc, wgrad))                 goto error_3;
+	if (!CuDnn_Context_describeConv(self, &convDesc, params)) goto error_4;
 
 	size_t size;
 	CUDNN_CHECK(cudnnGetConvolutionBackwardFilterWorkspaceSize(
@@ -835,7 +836,7 @@ static PyObject *CuDnn_Context_convNdbenchmark(PyObject *self, PyObject *args, P
 	))
 		goto error_1;
 
-	Cuda_DataType dtype; dtype = Cuda_toDataType(pytype->type_num);
+	Cuda_DataType dtype; dtype = Cuda_numpyToDataType(pytype->type_num);
 	if (dtype == DTYPE_INVALID)
 		goto error_2;
 

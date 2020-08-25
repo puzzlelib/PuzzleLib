@@ -1,11 +1,18 @@
 import numpy as np
 
-from PuzzleLib.Backend.Utils import memoryPool as memPool
 from PuzzleLib.Backend import gpuarray
 
-from PuzzleLib.Containers import Parallel, Sequential
-from PuzzleLib.Modules import Replicate, Conv2D, MaxPool2D, Activation, relu, sigmoid, Deconv2D, Concat, Identity, \
-	Dropout
+from PuzzleLib.Containers.Sequential import Sequential
+from PuzzleLib.Containers.Parallel import Parallel
+
+from PuzzleLib.Modules.Conv2D import Conv2D
+from PuzzleLib.Modules.MaxPool2D import MaxPool2D
+from PuzzleLib.Modules.Activation import Activation, relu, sigmoid
+from PuzzleLib.Modules.Deconv2D import Deconv2D
+from PuzzleLib.Modules.Replicate import Replicate
+from PuzzleLib.Modules.Concat import Concat
+from PuzzleLib.Modules.Identity import Identity
+from PuzzleLib.Modules.Dropout import Dropout
 
 
 def blockA(blockId, actInplace, initscheme):
@@ -113,7 +120,7 @@ def unittest():
 	assert unet(data).shape == inshape
 
 	del unet
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

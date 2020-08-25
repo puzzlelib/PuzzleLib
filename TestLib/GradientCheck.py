@@ -2,17 +2,20 @@ import numpy as np
 
 from PuzzleLib.Backend import gpuarray
 
-from PuzzleLib.Modules import *
-from PuzzleLib.Containers import *
+from PuzzleLib.Containers import Sequential
+from PuzzleLib.Modules import Conv2D, AvgPool2D, BatchNorm2D, Activation, relu, Flatten
 from PuzzleLib.Cost import BCE
 
 
 def buildNet():
 	net = Sequential(name="test-net")
+
 	net.append(Conv2D(1, 2, 3, wscale=1.0, initscheme="gaussian"))
 	net.append(AvgPool2D(2, 2))
+
 	net.append(BatchNorm2D(2))
 	net.append(Activation(relu))
+
 	net.append(Conv2D(2, 1, 2, wscale=1.0, initscheme="gaussian"))
 	net.append(Flatten())
 

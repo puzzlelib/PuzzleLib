@@ -2,11 +2,8 @@ from enum import Enum
 
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import copy
-from PuzzleLib.Backend.Kernels.MatVec import addVecToMat
-from PuzzleLib.Backend.Kernels.MatVecBatch import addVecToMatBatch
-from PuzzleLib.Backend import Blas, BlasGroup
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.Kernels.MatVec import addVecToMat, addVecToMatBatch
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -80,18 +77,16 @@ class GroupLinear(Module):
 
 	def updateData(self, data):
 		if self.useW:
-			self.data = BlasGroup.mulTensorBatch(
+			self.data = Blas.mulTensorBatch(
 				data, self.W, formatA=self.format, formatB="gbp", transpB=self.transpW, formatOut=self.format
 			)
 		else:
-			self.data = copy(None, data)
+			self.data = gpuarray.copy(None, data)
 
 		if self.useBias:
 			if self.groupDim == 1:
-				b = self.b.reshape(int(np.prod(self.b.shape)))
-				outdata = self.data.reshape(self.data.shape[0], int(np.prod(self.data.shape[1:])))
-
-				addVecToMat(b, outdata, axis=1, out=outdata)
+				outdata = self.data.reshape(self.data.shape[0], -1)
+				addVecToMat(self.b.ravel(), outdata, axis=1, out=outdata)
 
 			else:
 				addVecToMatBatch(self.b, self.data, axis=1, out=self.data)
@@ -101,7 +96,7 @@ class GroupLinear(Module):
 		if self.useW:
 			formatOut = self.format if self.inmode == GroupMode.full else "gbp"
 
-			self.grad = BlasGroup.mulTensorBatch(
+			self.grad = Blas.mulTensorBatch(
 				grad, self.W, formatA=self.format, formatB="gbp", transpB=not self.transpW, formatOut=formatOut
 			)
 
@@ -118,19 +113,19 @@ class GroupLinear(Module):
 			if self.useW:
 				A, B = (grad, self.inData) if self. transpW else (self.inData, grad)
 
-				BlasGroup.mulTensorBatch(
+				Blas.mulTensorBatch(
 					A, B, out=self.vars["W"].grad, formatA=self.format, formatB=self.format,
 					formatOut="gbp", transpA=True, alpha=scale, beta=momentum
 				)
 
 			if self.useBias:
-				BlasGroup.sumOnTensorGroup(grad, out=self.vars["b"].grad, formatT=self.format)
+				Blas.sumOnTensorGroup(grad, out=self.vars["b"].grad, formatT=self.format)
 
 		else:
 			if self.useW:
 				A, B = (grad, self.inData) if self.transpW else (self.inData, grad)
 
-				wgrad = BlasGroup.mulTensorBatch(
+				wgrad = Blas.mulTensorBatch(
 					A, B, transpA=True, formatA=self.format, formatB=self.format, formatOut="gbp",
 					alpha=scale, beta=momentum
 				)

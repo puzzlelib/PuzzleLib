@@ -8,8 +8,8 @@ from PuzzleLib.Modules.ConvND import ConvND
 
 
 class Conv2D(ConvND):
-	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True, name=None,
-				 initscheme=None, empty=False, groups=1):
+	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True,
+				 name=None, initscheme=None, empty=False, groups=1):
 		super().__init__(
 			2, inmaps, outmaps, size, stride, pad, dilation, wscale, useBias, name, initscheme, empty, groups
 		)
@@ -29,17 +29,14 @@ class Conv2D(ConvND):
 		if inmaps != self.W.shape[1] * self.groups:
 			raise ModuleError("Data has %d maps (expected: %d)" % (inmaps, self.W.shape[1] * self.groups))
 
-		if inh + 2 * hpad < hdilation * (fh - 1) + 1:
-			raise ModuleError(
-				"Data maps height is too small (got %d, expected at least %d)" %
-				(inh + 2 * hpad, hdilation * (fh - 1) + 1)
-			)
+		exth, extw = inh + 2 * hpad, inw + 2 * wpad
+		extfh, extfw = hdilation * (fh - 1) + 1, wdilation * (fw - 1) + 1
 
-		if inw + 2 * wpad < wdilation * (fw - 1) + 1:
-			raise ModuleError(
-				"Data maps width is too small (got %d, expected at least %d)" %
-				(inw + 2 * wpad, wdilation * (fw - 1) + 1)
-			)
+		if exth < extfh:
+			raise ModuleError("Data maps height is too small (got %d, expected at least %d)" % (exth, extfh))
+
+		if extw < extfw:
+			raise ModuleError("Data maps width is too small (got %d, expected at least %d)" % (extw, extfw))
 
 
 	def dataShapeFrom(self, shape):
@@ -94,30 +91,32 @@ def unittest():
 
 def oneMapTest():
 	batchsize, inmaps, h, w = 1, 1, 5, 5
-	outmaps, size = 1, 2
+	outmaps, size, postpad = 1, 2, 1
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv2D(inmaps, outmaps, size)
 	conv(data)
 
-	hostData, hostW, hostBias = data.get(), conv.W.get(), conv.b.get()
-	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
+	hostW, hostBias = conv.W.get(), conv.b.get()
 
+	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
 	hostOutData[:, 0, :, :] = hostBias[0, 0, 0, 0]
 
-	for y in range(conv.data.shape[2]):
-		for x in range(conv.data.shape[3]):
+	for y in range(hostOutData.shape[2]):
+		for x in range(hostOutData.shape[3]):
 			for dy in range(size):
 				for dx in range(size):
 					hostOutData[0, 0, y, x] += hostData[0, 0, y + dy, x + dx] * hostW[0, 0, dy, dx]
 
 	assert np.allclose(hostOutData, conv.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*conv.data.shape).astype(np.float32))
-	conv.backward(grad)
+	hostGrad = np.random.randn(*conv.data.shape).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostInGrad, hostGrad = np.zeros(data.shape).astype(np.float32), grad.get()
+	conv.backward(grad)
+	hostInGrad = np.zeros(data.shape).astype(np.float32)
 
 	for y in range(hostGrad.shape[2]):
 		for x in range(hostGrad.shape[3]):
@@ -132,12 +131,13 @@ def multiOutMapsTest():
 	batchsize, inmaps, h, w = 1, 1, 8, 8
 	outmaps, size = 2, 4
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv2D(inmaps, outmaps, size)
 	conv(data)
 
-	hostData, hostW, hostBias = data.get(), conv.W.get(), conv.b.get()
+	hostW, hostBias = conv.W.get(), conv.b.get()
 	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
 
 	for c in range(outmaps):
@@ -157,12 +157,13 @@ def multiInMapsTest():
 	batchsize, inmaps, h, w = 1, 2, 10, 10
 	outmaps, size = 1, 4
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv2D(inmaps, outmaps, size)
 	conv(data)
 
-	hostData, hostW, hostBias = data.get(), conv.W.get(), conv.b.get()
+	hostW, hostBias = conv.W.get(), conv.b.get()
 	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
 
 	for c in range(outmaps):
@@ -182,7 +183,8 @@ def multiMapsWithPadsTest():
 	batchsize, inmaps, h, w = 3, 4, 3, 3
 	outmaps, size, stride, pad, dilation = 4, 3, 2, 2, 2
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv2D(inmaps, outmaps, size=size, stride=stride, pad=pad, dilation=dilation, initscheme="gaussian")
 	conv(data)
@@ -190,8 +192,10 @@ def multiMapsWithPadsTest():
 	hostW, hostBias = conv.W.get(), conv.b.get()
 	dl = dilation
 
-	hostData = np.zeros(shape=(batchsize, inmaps, h + 2 * pad, w + 2 * pad))
-	hostData[:, :, pad:-pad, pad:-pad] = data.get()
+	hostExtData = np.zeros(shape=(batchsize, inmaps, h + 2 * pad, w + 2 * pad))
+
+	hostExtData[:, :, pad:-pad, pad:-pad] = hostData
+	hostData = hostExtData
 
 	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
 	for c in range(outmaps):
@@ -208,10 +212,11 @@ def multiMapsWithPadsTest():
 
 	assert np.allclose(hostOutData, conv.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*conv.data.shape).astype(np.float32))
-	conv.backward(grad)
+	hostGrad = np.random.randn(*conv.data.shape).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostGrad, hostInGrad = grad.get(), np.zeros(hostData.shape, dtype=np.float32)
+	conv.backward(grad)
+	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
 	for b in range(batchsize):
 		for ic in range(inmaps):
@@ -248,14 +253,13 @@ def groupTest():
 	size, outmaps = 3, 4
 	groups = 2
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, inh, inw).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, inh, inw).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv2D(inmaps, outmaps, size=size, initscheme="gaussian", groups=groups)
 	conv(data)
 
-	hostData = data.get()
 	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
-
 	hostW, hostBias = conv.W.get(), conv.b.get()
 
 	for c in range(outmaps):
@@ -279,10 +283,11 @@ def groupTest():
 
 	assert np.allclose(hostOutData, conv.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*conv.data.shape).astype(np.float32))
-	conv.backward(grad)
+	hostGrad = np.random.randn(*conv.data.shape).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostGrad, hostInGrad = grad.get(), np.zeros(hostData.shape, dtype=np.float32)
+	conv.backward(grad)
+	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
 	for g in range(groups):
 		hostGroup = hostGrad[:, g * outgrpsize:(g + 1) * outgrpsize, :, :]

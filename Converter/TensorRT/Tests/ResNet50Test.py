@@ -7,7 +7,7 @@ from PuzzleLib.Models.Nets.ResNet import loadResNet
 from PuzzleLib.Converter.Examples.Common import loadResNetSample, loadLabels
 
 from PuzzleLib.Converter.TensorRT.Tests.Common import scoreModels, benchModels
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, DataType
+from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
 	data = gpuarray.to_gpu(loadResNetSample(net, "../../TestData/tarantula.jpg"))
 	labels = loadLabels(synpath="../../TestData/synsets.txt", wordpath="../../TestData/synset_words.txt")
 
-	engine = buildRTEngine(net, inshape=data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(net, inshape=data.shape, savepath="../TestData")
 
 	scoreModels(net, engine, data, labels)
 	benchModels(net, engine, data)

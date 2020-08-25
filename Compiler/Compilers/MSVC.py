@@ -31,7 +31,7 @@ class MSVC(Compiler):
 
 
 	def fullCFlags(self, asObject, debug=True, optimize=True):
-		oflags = ["/EHsc"] if self.cpp else []
+		oflags = ["/std:c++14", "/EHsc"] if self.cpp else []
 
 		if optimize and self.optlevel > 0:
 			oflags.append("/Ox" if self.optlevel >= 3 else "/O%s" % self.optlevel)

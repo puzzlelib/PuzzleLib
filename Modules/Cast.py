@@ -3,7 +3,7 @@ from enum import Enum
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import castFP16toFP32, castFP32toFP16
 
 from PuzzleLib.Modules.Module import ModuleError, Module

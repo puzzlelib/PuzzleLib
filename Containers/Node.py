@@ -1,5 +1,4 @@
-from PuzzleLib.Backend import Blas
-from PuzzleLib.Backend.Utils import copy
+from PuzzleLib.Backend import gpuarray, Blas
 
 
 class NodeError(Exception):
@@ -120,7 +119,7 @@ class Node:
 
 		for i, grads in enumerate(grad):
 			if len(grads) > 1:
-				gr = copy(None, grads[0])
+				gr = gpuarray.copy(None, grads[0])
 
 				for j in range(1, len(grads)):
 					Blas.toVectorAddVector(gr.ravel(), grads[j].ravel())

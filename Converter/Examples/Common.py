@@ -57,4 +57,7 @@ def loadResNetSample(net, filename, shape=None):
 
 
 def loadSample(filename, shape=None):
-	return Visual.loadImage(filename, shape, normalize=False)[:, ::-1, :, :].astype(np.float32)
+	return np.ascontiguousarray(
+		Visual.loadImage(filename, shape, normalize=False, contiguous=False)[:, ::-1, :, :],
+		dtype=np.float32
+	)

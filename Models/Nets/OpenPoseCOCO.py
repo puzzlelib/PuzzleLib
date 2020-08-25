@@ -1,22 +1,16 @@
 import numpy as np
 
-from PuzzleLib import Config
-Config.globalEvalMode = True
-
 from PuzzleLib.Backend import gpuarray
-
-from PuzzleLib.Modules.Conv2D import Conv2D
-from PuzzleLib.Modules.Replicate import Replicate
-from PuzzleLib.Modules.Identity import Identity
-from PuzzleLib.Modules.Activation import Activation, relu
-from PuzzleLib.Modules.Concat import Concat
-from PuzzleLib.Modules.MaxPool2D import MaxPool2D
 
 from PuzzleLib.Containers.Sequential import Sequential
 from PuzzleLib.Containers.Parallel import Parallel
 
-from PuzzleLib.Converter.TensorRT.Tests.Common import benchModels
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, buildRTEngineFromCaffe, DataType
+from PuzzleLib.Modules.Conv2D import Conv2D
+from PuzzleLib.Modules.Activation import Activation, relu
+from PuzzleLib.Modules.MaxPool2D import MaxPool2D
+from PuzzleLib.Modules.Replicate import Replicate
+from PuzzleLib.Modules.Identity import Identity
+from PuzzleLib.Modules.Concat import Concat
 
 
 def buildSmallBlock(inplace=True):
@@ -115,7 +109,7 @@ def buildBigBlock(stage=2, prenet=None, inplace=True):
 	return block
 
 
-def loadNet(name="", inplace=True, modelpath=None):
+def loadCOCO(modelpath, name="", inplace=False):
 	net = Sequential(name)
 
 	net.append(Conv2D(3, 64, 3, pad=1, initscheme="none", name="conv1_1"))
@@ -183,26 +177,15 @@ def loadNet(name="", inplace=True, modelpath=None):
 	return net
 
 
-def main():
-	inshape = (1, 3, 368, 368)
+def unittest():
+	data = gpuarray.to_gpu(np.random.randn(1, 3, 368, 368).astype(np.float32))
 
-	net = loadNet(inplace=False, modelpath="../TestData/pose_iter_440000.hdf")
-	outshape = net.dataShapeFrom(inshape)
+	coco = loadCOCO(None)
+	coco(data)
 
-	pzlEngine = buildRTEngine(net, inshape=inshape, dtype=DataType.float32, savepath="../TestData")
-	caffeEngine = buildRTEngineFromCaffe(
-		("../TestData/pose_deploy_linevec.prototxt", "../TestData/pose_iter_440000.caffemodel"),
-		inshape=inshape, outshape=outshape, outlayers=["net_output"], dtype=DataType.float32, savepath="../TestData"
-	)
-
-	data = gpuarray.to_gpu(np.random.randn(*inshape).astype(np.float32))
-
-	pzlData = pzlEngine(data)
-	caffeData = caffeEngine(data)
-
-	assert np.allclose(pzlData.get(), caffeData.get(), atol=1e-7)
-	benchModels(pzlEngine, caffeEngine, data, lognames=("puzzle", "caffe "))
+	del coco
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":
-	main()
+	unittest()

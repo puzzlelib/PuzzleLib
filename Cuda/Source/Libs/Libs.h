@@ -46,13 +46,14 @@ do { cudnnStatus_t code = (status); (void)code; assert(code == CUDNN_STATUS_SUCC
 enum
 {
 	GPUTENSOR_DIM_MIN = 4,
-	GPUTENSOR_DIM_MAX = 5
+	GPUTENSOR_DIM_MAX = 5,
+	GPUTENSOR_MAP_MAX = GPUTENSOR_DIM_MAX - 2
 };
 
 inline static bool CuDnn_isValidDim(size_t dim) { return dim <= GPUTENSOR_DIM_MAX && dim >= GPUTENSOR_DIM_MIN; }
 inline static bool CuDnn_isValidExtDim(size_t dim) { return dim <= GPUTENSOR_DIM_MAX && dim >= 1; }
-inline static bool CuDnn_isValidDescribedDim(size_t dim) { return dim <= GPUTENSOR_DIM_MAX && dim >= 3; }
 inline static bool CuDnn_isValidDtype(Cuda_DataType dtype) { return dtype == DTYPE_FLOAT32 || dtype == DTYPE_FLOAT16; }
+inline static bool CuDnn_isValidDescribedDim(size_t dim) { return dim <= GPUTENSOR_DIM_MAX && dim >= 3; }
 
 inline static bool CuDnn_isValid1DTensor(const Cuda_GPUArray *tensor, size_t size, Cuda_DataType dtype, const char *key)
 {

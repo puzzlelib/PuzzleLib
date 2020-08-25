@@ -1,8 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend import Blas
-
+from PuzzleLib.Backend import gpuarray, Blas
 from PuzzleLib.Cost.Cost import Cost
 
 
@@ -16,8 +14,9 @@ class MSE(Cost):
 
 
 	def calcError(self, pred, target):
-		self.devErr.fill(Blas.dot(self.grad.ravel(), self.grad.ravel()) * np.prod(self.grad.shape)
-						 * self.grad.shape[0] / 2.0)
+		self.devErr.fill(
+			Blas.dot(self.grad.ravel(), self.grad.ravel()) * np.prod(self.grad.shape) * self.grad.shape[0] / 2.0
+		)
 		self.accumErr += self.devErr
 
 

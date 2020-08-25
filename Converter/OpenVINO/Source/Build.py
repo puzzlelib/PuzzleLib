@@ -4,8 +4,8 @@ import pybind11
 from PuzzleLib.Compiler.Toolchain import guessToolchain
 
 
-def buildDriver():
-	cc = prepareCompiler()
+def buildDriver(debugmode=0):
+	cc = prepareCompiler(debugmode=debugmode)
 
 	driver = "../Driver%s" % cc.pydext
 	cc.build(driver, sourcefiles="./Driver.cpp").clearPath("..")
@@ -18,7 +18,7 @@ def findLibraryPath():
 
 	if OPENVINO_PATH is None:
 		if sys.platform == "linux":
-			OPENVINO_PATH = os.path.expanduser("~/intel/openvino")
+			OPENVINO_PATH = "/opt/intel/openvino"
 
 		elif sys.platform == "win32":
 			raise OSError("OpenVINO path needs to be specified in the system variables as OPENVINO_PATH")
@@ -29,8 +29,10 @@ def findLibraryPath():
 	return OPENVINO_PATH
 
 
-def prepareCompiler():
-	cc = guessToolchain(verbose=2).withOptimizationLevel(level=4, debuglevel=0).cppMode(True)
+def prepareCompiler(debugmode=0):
+	level, debuglevel = (0, 3) if debugmode > 0 else (4, 0)
+
+	cc = guessToolchain(verbose=2).withOptimizationLevel(level=level, debuglevel=debuglevel).cppMode(True)
 	OPENVINO_PATH = findLibraryPath()
 
 	if sys.platform == "linux":
@@ -58,7 +60,7 @@ def prepareCompiler():
 
 
 def main():
-	return buildDriver()
+	return buildDriver(debugmode=0)
 
 
 if __name__ == "__main__":

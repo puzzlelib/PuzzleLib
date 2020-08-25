@@ -3,7 +3,6 @@ import time
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
 
 from PuzzleLib.Containers.Sequential import Sequential
 from PuzzleLib.Containers.Parallel import Parallel
@@ -92,7 +91,7 @@ def unittest():
 	senti(data)
 
 	del senti
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

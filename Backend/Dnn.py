@@ -34,6 +34,29 @@ crossMapLRN = None
 crossMapLRNBackward = None
 
 
+instanceNorm2d = None
+instanceNorm2dBackward = None
+
+
+spatialTf = None
+spatialTfBackward = None
+
+
+RNNMode = None
+DirectionMode = None
+
+createRnn = None
+
+acquireRnnParams = None
+updateRnnParams = None
+
+forwardRnn = None
+backwardDataRnn = None
+backwardParamsRnn = None
+
+deviceSupportsBatchHint = None
+
+
 def autoinit():
 	if not Config.shouldInit():
 		return
@@ -87,10 +110,19 @@ def initCuda():
 	crossMapLRN = wrapCrossMapLRN
 	crossMapLRNBackward = wrapCrossMapLRNBackward
 
+	def wrapSpatialTf(data, transform, outshape, getGrid):
+		return dnn.spatialTf(data, transform, outshape, getGrid, allocator=memoryPool)
+
+	def wrapSpatialTfBackward(grad, data, grid):
+		return dnn.spatialTfBackward(grad, data, grid, allocator=memoryPool)
+
+	global spatialTf, spatialTfBackward
+	spatialTf = wrapSpatialTf
+	spatialTfBackward = wrapSpatialTfBackward
+
 
 def initHip():
 	from PuzzleLib.Hip import Backend
-	initGPU(Backend)
 
 	backend = initGPU(Backend)
 	memoryPool, dnn = backend.memoryPool, backend.dnn
@@ -125,9 +157,17 @@ def initHip():
 
 
 def initGPU(Backend):
-	import numpy as np
+	backend = Backend.getBackend(Config.deviceIdx, initmode=1, logger=Config.getLogger())
 
-	backend = Backend.getBackend(Config.deviceIdx, initmode=1)
+	initBaseGPU(backend)
+	initInstanceNormGPU(backend)
+	initRnnGPU(backend)
+
+	return backend
+
+
+def initBaseGPU(backend):
+	import numpy as np
 	memoryPool, dnn = backend.memoryPool, backend.dnn
 
 	global ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
@@ -143,7 +183,7 @@ def initGPU(Backend):
 
 	def wrapConvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
 		return dnn.convNdBackwardData(
-			grad, W, None, data, stride, pad, dilation, groups, algo.value, None, memoryPool
+			grad, W, None, data, stride, pad, dilation, None, groups, algo.value, None, memoryPool
 		)
 
 	def wrapConvNdBackwardParams(data, grad, W, bias, stride, pad, dilation, groups,
@@ -168,9 +208,9 @@ def initGPU(Backend):
 	global convNdbenchmark
 	convNdbenchmark = wrapConvNdbenchmark
 
-	def wrapDeconvNd(data, W, bias, stride, pad, dilation, groups, algo):
+	def wrapDeconvNd(data, W, bias, stride, pad, dilation, postpad, groups, algo):
 		return dnn.convNdBackwardData(
-			data, W, bias.ravel() if bias is not None else None, None, stride, pad, dilation, groups,
+			data, W, bias.ravel() if bias is not None else None, None, stride, pad, dilation, postpad, groups,
 			algo.value, None, memoryPool
 		)
 
@@ -231,6 +271,70 @@ def initGPU(Backend):
 	softmaxNd = wrapSoftmaxNd
 	softmaxNdBackward = wrapSoftmaxNdBackward
 
+
+def initInstanceNormGPU(backend):
+	memoryPool = backend.memoryPool
+
+	def wrapInstanceNorm2d(data, scale, bias, epsilon=1e-5):
+		return backend.instanceNorm2d(data, scale.ravel(), bias.ravel(), epsilon, allocator=memoryPool)
+
+	def wrapInstanceNorm2dBackward(grad, data, extscale, savemean, saveinvvar, epsilon, affine):
+		return backend.instanceNorm2dBackward(
+			grad, data, extscale, savemean, saveinvvar, epsilon, affine, allocator=memoryPool
+		)
+
+	global instanceNorm2d, instanceNorm2dBackward
+	instanceNorm2d = wrapInstanceNorm2d
+	instanceNorm2dBackward = wrapInstanceNorm2dBackward
+
+
+def initRnnGPU(backend):
+	import numpy as np
+	memoryPool = backend.memoryPool
+
+	global RNNMode, DirectionMode
+	RNNMode = backend.RNNMode
+	DirectionMode = backend.DirectionMode
+
+	def wrapCreateRnn(insize, hsize, layers, mode, direction, dropout, seed, batchsize):
+		rnn, W, params = backend.createRnn(
+			insize, hsize, np.float32, layers, mode=mode, direction=direction, dropout=dropout,
+			seed=seed, batchsize=0 if batchsize is None else batchsize
+		)
+
+		return rnn, W, {i: layer for i, layer in enumerate(params)}
+
+	def wrapAcquireRnnParams(descRnn, w):
+		params = backend.acquireRnnParams(descRnn, w)
+		return w, params
+
+	def wrapUpdateRnnParams(descRnn, w, params):
+		params = [params[layer] for layer in sorted(params.keys())]
+		backend.updateRnnParams(descRnn, w, params)
+
+	global createRnn, acquireRnnParams, updateRnnParams
+	createRnn = wrapCreateRnn
+	acquireRnnParams = wrapAcquireRnnParams
+	updateRnnParams = wrapUpdateRnnParams
+
+	def wrapForwardRnn(data, W, descRnn, test=False):
+		return descRnn.forward(data, W, test=test, allocator=memoryPool)
+
+	def wrapBackwardDataRnn(grad, outdata, W, reserve, descRnn):
+		ingrad, _, _ = descRnn.backwardData(grad, outdata, W, reserve, allocator=memoryPool)
+		return ingrad, reserve
+
+	def wrapBackwardParamsRnn(data, outdata, _, reserve, descRnn):
+		return descRnn.backwardParams(data, outdata, reserve, allocator=memoryPool)
+
+	global forwardRnn, backwardDataRnn, backwardParamsRnn
+	forwardRnn = wrapForwardRnn
+	backwardDataRnn = wrapBackwardDataRnn
+	backwardParamsRnn = wrapBackwardParamsRnn
+
+	global deviceSupportsBatchHint
+	deviceSupportsBatchHint = backend.deviceSupportsBatchHint
+
 	return backend
 
 
@@ -238,8 +342,8 @@ def initCPU():
 	from PuzzleLib.CPU.Wrappers import NumpyDnn
 
 	def wrapConvNd(data, W, bias, stride, pad, dilation, groups, algo):
-		assert dilation == (1, 1) and groups == 1
-		return NumpyDnn.conv2d(data, W, bias, stride, pad)
+		assert groups == 1
+		return NumpyDnn.conv2d(data, W, bias, stride, pad, dilation)
 
 	global convNd, convNdBackwardData, convNdBackwardParams
 	convNd = wrapConvNd
@@ -263,9 +367,12 @@ def initCPU():
 	BatchNormMode = ProxyBatchNormMode
 	batchNormNd = wrapBatchNormNd
 
+	global deviceSupportsBatchHint
+	deviceSupportsBatchHint = lambda: False
+
 
 def initIntel():
-	from PuzzleLib.Intel.Wrappers import DNNL
+	from PuzzleLib.Intel.Wrappers import DNNL, DNNLInstanceNorm
 
 	global ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
 	ConvFwdAlgo = DNNL.ConvAlgo
@@ -299,9 +406,9 @@ def initIntel():
 	global convNdbenchmark
 	convNdbenchmark = wrapConvNdbenchmark
 
-	def wrapDeconvNd(data, W, bias, stride, pad, dilation, groups, algo):
+	def wrapDeconvNd(data, W, bias, stride, pad, dilation, groups, postpad, algo):
 		assert groups == 1
-		return DNNL.convNd(data, W, bias, stride, pad, dilation, algo=algo, transpose=True)
+		return DNNL.convNd(data, W, bias, stride, pad, dilation, postpad, algo=algo, transpose=True)
 
 	def wrapDeconvNdBackwardData(grad, W, data, stride, pad, dilation, groups, algo):
 		assert groups == 1
@@ -359,6 +466,25 @@ def initIntel():
 	global crossMapLRN, crossMapLRNBackward
 	crossMapLRN = wrapCrossMapLRN
 	crossMapLRNBackward = wrapCrossMapLRNBackward
+
+	def wrapInstanceNorm2d(data, scale, bias, epsilon):
+		result = DNNLInstanceNorm.instanceNorm2d(data, scale, bias, epsilon)
+
+		outdata, savemean, savevar, extscale, extbias, desc = result
+		return outdata, savemean, savevar, (extscale, extbias, desc)
+
+	def wrapInstanceNorm2dBackward(grad, data, exts, savemean, savevar, epsilon, affine):
+		extscale, extbias, desc = exts
+		return DNNLInstanceNorm.instanceNorm2dBackward(
+			grad, data, extscale, extbias, savemean, savevar, epsilon, desc, affine
+		)
+
+	global instanceNorm2d, instanceNorm2dBackward
+	instanceNorm2d = wrapInstanceNorm2d
+	instanceNorm2dBackward = wrapInstanceNorm2dBackward
+
+	global deviceSupportsBatchHint
+	deviceSupportsBatchHint = lambda: False
 
 
 autoinit()

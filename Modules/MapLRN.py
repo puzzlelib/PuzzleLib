@@ -3,7 +3,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.Basic import mapLRN, mapLRNBackward
+from PuzzleLib.Backend.Dnn import mapLRN, mapLRNBackward
 
 from PuzzleLib.Modules.LRN import LRN
 

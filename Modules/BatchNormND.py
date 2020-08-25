@@ -3,7 +3,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray, Blas
-from PuzzleLib.Backend.Dnn.Basic import batchNormNd, batchNormNdBackward
+from PuzzleLib.Backend.Dnn import batchNormNd, batchNormNdBackward
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -13,10 +13,10 @@ class BatchNormND(Module):
 	def __init__(self, nd, maps, epsilon=1e-5, initFactor=1.0, minFactor=0.1, sscale=0.01, affine=True, name=None,
 				 empty=False, inplace=False):
 		super().__init__(name)
-
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 		self.maps = maps
 		self.epsilon = epsilon

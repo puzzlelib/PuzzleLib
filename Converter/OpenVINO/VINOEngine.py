@@ -1,65 +1,44 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 
 from PuzzleLib.Modules.Module import Module
 from PuzzleLib.Converter.OpenVINO import Driver
 
 
-def genEngineName(name, inshape, outshape):
-	inshape = ",".join("-".join(str(s) for s in sh) for sh in inshape)
-	outshape = ",".join("-".join(str(s) for s in sh) for sh in outshape)
-
-	fullname = "%s.%s.%s" % (name, inshape, outshape)
-	return fullname
-
-
-def parseEngineShape(enginename):
-	subnames = enginename.split(sep=".")
-	inshape, outshape = subnames[1], subnames[2]
-
-	inshape = [tuple(int(v) for v in sh.split(sep="-")) for sh in inshape.split(sep=",")]
-	inshape = inshape[0] if len(inshape) == 1 else inshape
-
-	outshape = [tuple(int(v) for v in sh.split(sep="-")) for sh in outshape.split(sep=",")]
-	outshape = outshape[0] if len(outshape) == 1 else outshape
-
-	return inshape, outshape
+def genEngineName(name):
+	return "%s.xml" % name, "%s.bin" % name
 
 
 class VINOEngine(Module):
-	def __init__(self, batchsize, xmlpath, binpath, inshape=None, outshape=None, name=None):
+	def __init__(self, enginepath, batchsize, name=None):
 		super().__init__(name)
 		self.registerBlueprint(locals())
 
-		shapes = [inshape, outshape]
-
-		if inshape is None or outshape is None:
-			parsedInshape, parsedOutshape = parseEngineShape(xmlpath)
-			shapes = [parsedInshape if inshape is None else inshape, parsedOutshape if outshape is None else outshape]
-
-		shapes = [sh if isinstance(sh, list) else [sh] for sh in shapes]
-		shapes = [[(batchsize, ) + s for s in sh] for sh in shapes]
-		shapes = [sh[0] if len(sh) == 1 else sh for sh in shapes]
-
-		self.inshape, self.outshape = shapes
+		xmlpath, binpath = enginepath
 		self.engine = Driver.VINOEngine(batchsize, xmlpath, binpath, "CPU")
+
+		inshape, outshape = self.engine.inshape, self.engine.outshape
+
+		inshape = [tuple(inshape[key]) for key in sorted(inshape.keys(), key=lambda nm: nm.split(sep="_")[-1])]
+		outshape = [tuple(outshape[key]) for key in sorted(outshape.keys(), key=lambda nm: nm.split(sep="_")[-1])]
+
+		self.inshape = inshape[0] if len(inshape) == 1 else inshape
+		self.outshape = outshape[0] if len(outshape) == 1 else outshape
 
 
 	def updateData(self, data):
-		if isinstance(self.outshape, list):
-			self.data = [gpuarray.empty(outshape, dtype=np.float32, allocator=memPool) for outshape in self.outshape]
-		else:
-			self.data = gpuarray.empty(self.outshape, dtype=np.float32, allocator=memPool)
-
 		data = data if isinstance(data, list) else [data]
-		inputs = {"data_%s" % i: (dat.ptr, dat.nbytes) for i, dat in enumerate(data)}
+		inputs = {"data_%s" % i: (d.ptr, d.nbytes) for i, d in enumerate(data)}
 
-		outdata = self.data if isinstance(self.data, list) else [self.data]
+		outshape = [self.outshape] if not isinstance(self.outshape, list) else self.outshape
+
+		outdata = [gpuarray.empty(shape, dtype=np.float32, allocator=memPool) for shape in outshape]
 		outputs = {"outdata_%s" % i: (data.ptr, data.nbytes) for i, data in enumerate(outdata)}
 
 		self.engine.infer(outputs, inputs)
+		self.data = outdata if isinstance(self.outshape, list) else outdata[0]
 
 
 	def updateGrad(self, grad):

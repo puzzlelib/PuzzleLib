@@ -2,14 +2,18 @@ import numpy as np
 
 from PuzzleLib.Backend import gpuarray
 
-from PuzzleLib.Containers import Sequential, Parallel
-from PuzzleLib.Modules import Conv2D, Activation, relu, MaxPool2D, Replicate, Identity, Concat
+from PuzzleLib.Containers.Sequential import Sequential
+from PuzzleLib.Containers.Parallel import Parallel
 
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngineFromCaffe, DataType
-from PuzzleLib.Converter.TensorRT.Tests.Common import benchModels
+from PuzzleLib.Modules.Conv2D import Conv2D
+from PuzzleLib.Modules.Activation import Activation, relu
+from PuzzleLib.Modules.MaxPool2D import MaxPool2D
+from PuzzleLib.Modules.Replicate import Replicate
+from PuzzleLib.Modules.Identity import Identity
+from PuzzleLib.Modules.Concat import Concat
 
 
-def loadNet(modelpath=None, name="OpenPoseFaceNet"):
+def loadMPI(modelpath, name="OpenPoseFaceNet"):
 	net = Sequential(name=name)
 
 	net.append(Conv2D(3, 64, 3, pad=1, name="conv1_1"))
@@ -113,33 +117,20 @@ def loadNet(modelpath=None, name="OpenPoseFaceNet"):
 		branch.append(Conv2D(128, 71, 1, pad=0, name="Mconv7_stage%d" % (branchIdx + 1)))
 
 	if modelpath is not None:
-		net.load(modelpath, assumeUniqueNames=True, name=name)
-		net.evalMode()
+		net.load(modelpath, assumeUniqueNames=True)
 
 	return net
 
 
-def main():
-	inshape = (1, 3, 368, 368)
+def unittest():
+	data = gpuarray.to_gpu(np.random.randn(1, 3, 368, 368).astype(np.float32))
 
-	net = loadNet("../TestData/pose_iter_116000.hdf")
-	net.optimizeForShape(inshape)
+	mpi = loadMPI(None)
+	mpi(data)
 
-	outshape = net.dataShapeFrom(inshape)
-
-	engine = buildRTEngineFromCaffe(
-		("../TestData/pose_deploy.prototxt", "../TestData/pose_iter_116000.caffemodel"),
-		inshape=inshape, outshape=outshape, outlayers=["net_output"], dtype=DataType.float32, savepath="../TestData"
-	)
-
-	data = gpuarray.to_gpu(np.random.randn(*inshape).astype(np.float32))
-
-	netData = net(data).get()
-	engineData = engine(data).get()
-
-	assert np.allclose(netData, engineData)
-	benchModels(net, engine, data)
+	del mpi
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":
-	main()
+	unittest()

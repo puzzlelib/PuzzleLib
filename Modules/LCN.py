@@ -3,7 +3,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray, Blas
-from PuzzleLib.Backend.Dnn.Basic import PoolMode, poolNd, poolNdBackward, mapLRN, mapLRNBackward
+from PuzzleLib.Backend.Dnn import PoolMode, poolNd, poolNdBackward, mapLRN, mapLRNBackward
 
 from PuzzleLib.Modules.Module import ModuleError
 from PuzzleLib.Modules.LRN import LRN
@@ -31,19 +31,24 @@ class LCN(LRN):
 
 
 	def updateData(self, data):
-		self.means, self.poolspace = poolNd(data, size=self.size, stride=1, pad=self.pad, mode=self.mode,
-											test=not self.train)
-		self.data, self.lrnspace = mapLRN(data, self.means, N=self.N, alpha=self.alpha, beta=self.beta, K=self.K,
-										  test=not self.train)
+		self.means, self.poolspace = poolNd(
+			data, size=self.size, stride=1, pad=self.pad, mode=self.mode, test=not self.train
+		)
+		self.data, self.lrnspace = mapLRN(
+			data, self.means, N=self.N, alpha=self.alpha, beta=self.beta, K=self.K, test=not self.train
+		)
 
 
 	def updateGrad(self, grad):
-		self.grad, meansGrad = mapLRNBackward(self.inData, self.data, grad, self.means, None,
-											  N=self.N, alpha=self.alpha, beta=self.beta, K=self.K)
+		self.grad, meansGrad = mapLRNBackward(
+			self.inData, self.data, grad, self.means, None, N=self.N, alpha=self.alpha, beta=self.beta, K=self.K
+		)
 
 		if self.includePad:
-			meansGrad = poolNdBackward(self.inData, self.means, meansGrad, self.workspace, size=self.size, stride=1,
-									   pad=self.pad, mode=self.mode)
+			meansGrad = poolNdBackward(
+				self.inData, self.means, meansGrad, self.workspace, size=self.size, stride=1, pad=self.pad,
+				mode=self.mode
+			)
 			Blas.addVectorToVector(self.grad.ravel(), meansGrad.ravel(), out=self.grad.ravel(), beta=-1.0)
 
 

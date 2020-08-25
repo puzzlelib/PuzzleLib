@@ -2,14 +2,17 @@ import math
 
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool, globalRng
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.gpuarray import globalRng, memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import rbmKer
 from PuzzleLib.Backend.Kernels.MatVec import addVecToMat
-from PuzzleLib.Backend import Blas
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import Module
+
+from PuzzleLib.Optimizers.MomentumSGD import MomentumSGD
+from PuzzleLib.Datasets.MnistLoader import MnistLoader
+from PuzzleLib.Visual import showFilters
 
 
 class RBM(Module):
@@ -116,13 +119,9 @@ class RBM(Module):
 
 
 def unittest():
-	from PuzzleLib.Optimizers.MomentumSGD import MomentumSGD
-	from PuzzleLib.Datasets.MnistLoader import MnistLoader
-	from PuzzleLib.Visual import showImageBatchInFolder
-
 	mnist = MnistLoader()
 	data, _ = mnist.load(path="../../TestData")
-	data = data[:].reshape(data.shape[0], np.prod(data.shape[1:]))
+	data = data[:].reshape(data.shape[0], -1)
 
 	rbm = RBM(784, 500)
 	optimizer = MomentumSGD(momRate=0.5)
@@ -133,16 +132,16 @@ def unittest():
 
 	for epoch in range(10):
 		for i in range(data.shape[0] // batchsize):
-			batch = data[i * batchsize:(i+1) * batchsize]
+			batch = data[i * batchsize:(i + 1) * batchsize]
 			rbm.calcPCDGrad(batch)
 			optimizer.update()
 
 		optimizer.learnRate *= 0.9
-		print("Finished epoch %d" % (epoch+1))
+		print("Finished epoch %d" % (epoch + 1))
 
-		if (epoch+1) % 5 == 0:
+		if (epoch + 1) % 5 == 0:
 			filters = rbm.W.get().T
-			showImageBatchInFolder(filters.reshape(500, 1, 28, 28), "../../TestData/rbm", "filter")
+			showFilters(filters.reshape(filters.shape[0] // 25, 25, 28, 28), "../../TestData/rbm.png")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray, Blas, Utils
-from PuzzleLib.Backend.Utils import dtypesSupported
-
+from PuzzleLib.Backend import gpuarray, Blas
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
@@ -16,12 +14,12 @@ class Tile(Module):
 
 
 	def updateData(self, data):
-		self.data = Utils.tile(data, self.times, axis=self.axis)
+		self.data = gpuarray.tile(data, self.times, axis=self.axis)
 
 
 	def updateGrad(self, grad):
 		sections = [grad.shape[self.axis] // self.times] * self.times
-		ingrad = Utils.split(grad, sections, axis=self.axis)
+		ingrad = gpuarray.split(grad, sections, axis=self.axis)
 
 		for i in range(1, len(ingrad)):
 			Blas.toVectorAddVector(ingrad[0].ravel(), ingrad[i].ravel())
@@ -51,7 +49,7 @@ class Tile(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -60,7 +58,7 @@ class Tile(Module):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		alongBatchAxisTest(dtype)
 		alongDataAxisTest(dtype)
 

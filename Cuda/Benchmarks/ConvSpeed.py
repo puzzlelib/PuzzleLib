@@ -1,5 +1,5 @@
 import numpy as np
-from PuzzleLib import Config
+from PuzzleLib.Cuda.Backend import getBackend
 
 
 def main():
@@ -7,11 +7,7 @@ def main():
 	Wshape = (64, 32, 11, 11)
 
 	stride, pad, dilation, groups = 1, 0, 1, datashape[1] // Wshape[1]
-
-	from PuzzleLib.Cuda.Backend import getBackend
-	backend = getBackend(Config.deviceIdx, initmode=1)
-
-	timeConv(backend, datashape, Wshape, np.float32, stride, pad, dilation, groups)
+	timeConv(getBackend(initmode=1), datashape, Wshape, np.float32, stride, pad, dilation, groups)
 
 
 def timeConv(backend, datashape, Wshape, dtype, stride, pad, dilation, groups):

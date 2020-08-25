@@ -2,9 +2,8 @@ from enum import Enum
 
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
-from PuzzleLib.Backend import Blas
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import l1penaltyKer
 
 from PuzzleLib.Modules.Module import Module
@@ -37,9 +36,9 @@ class Penalty(Module):
 			l1penaltyKer(self.grad, grad, self.data, self.weight / grad.shape[0])
 
 		elif self.mode == PenaltyMode.l2:
-			self.grad = Blas.addVectorToVector(grad.ravel(), self.data.ravel(), alpha=1.0,
-											   beta=-self.weight / grad.shape[0])
-			self.grad = self.grad.reshape(grad.shape)
+			self.grad = Blas.addVectorToVector(
+				grad.ravel(), self.data.ravel(), alpha=1.0, beta=-self.weight / grad.shape[0]
+			).reshape(grad.shape)
 
 		else:
 			raise NotImplementedError(self.mode)

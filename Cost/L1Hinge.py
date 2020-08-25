@@ -2,11 +2,10 @@ import numpy as np
 
 from PuzzleLib import Config
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import absKer
 from PuzzleLib.Backend.Kernels.Costs import l1HingeKer, getAccuracyKernel
-from PuzzleLib.Backend import Blas
 
 from PuzzleLib.Cost.Cost import CostError, Cost
 

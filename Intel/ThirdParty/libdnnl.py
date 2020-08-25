@@ -1,8 +1,8 @@
-import sys, ctypes
+import ctypes
 from PuzzleLib.Intel.ThirdParty.finddnnl import findDNNL
 
 
-_libdnnl = (ctypes.windll if sys.platform == "win32" else ctypes.cdll).LoadLibrary(findDNNL())
+_libdnnl = findDNNL()
 
 
 class dnnlError(Exception):

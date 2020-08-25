@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 

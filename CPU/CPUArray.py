@@ -56,10 +56,7 @@ class CPUArray:
 
 
 	def set(self, ary):
-		if isinstance(ary, CPUArray):
-			ary = ary.data
-
-		self.data[...] = ary
+		self.data[...] = ary.data if isinstance(ary, CPUArray) else ary
 
 
 	def fill(self, value):
@@ -81,7 +78,9 @@ class CPUArray:
 		return CPUArray(data.shape, data.dtype, data=data, acquire=True)
 
 
-	def copy(self):
+	def copy(self, allocator=None):
+		unused(allocator)
+
 		data = self.data.copy()
 		return CPUArray(data.shape, data.dtype, data=data, acquire=True)
 
@@ -206,3 +205,7 @@ class CPUArray:
 	def swapaxes(ary, axis1, axis2):
 		out = np.copy(np.swapaxes(ary.data, axis1, axis2))
 		return CPUArray(out.shape, out.dtype, data=out, acquire=True)
+
+
+def unused(*_, **__):
+	pass

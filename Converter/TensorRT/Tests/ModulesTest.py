@@ -7,6 +7,7 @@ from PuzzleLib.Containers.Sequential import Sequential
 from PuzzleLib.Modules.Activation import Activation, relu, leakyRelu, clip
 from PuzzleLib.Modules.BatchNorm import BatchNorm
 from PuzzleLib.Modules.BatchNorm1D import BatchNorm1D
+from PuzzleLib.Modules.InstanceNorm2D import InstanceNorm2D
 from PuzzleLib.Modules.Conv1D import Conv1D
 from PuzzleLib.Modules.Conv2D import Conv2D
 from PuzzleLib.Modules.CrossMapLRN import CrossMapLRN
@@ -21,17 +22,17 @@ from PuzzleLib.Modules.Split import Split
 from PuzzleLib.Modules.SwapAxes import SwapAxes
 from PuzzleLib.Modules.Upsample2D import Upsample2D
 
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, DataType
+from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine
 
 
 def deconv2dTest():
 	batchsize, inmaps, inh, inw = 2, 3, 4, 5
 	outmaps = 5
 
-	mod = Deconv2D(inmaps, outmaps, size=2, stride=2, name="deconv", useBias=False)
+	mod = Deconv2D(inmaps, outmaps, size=2, stride=2, postpad=1, name="deconv", useBias=False)
 	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, inh, inw).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -45,7 +46,7 @@ def crossMapLRNTest():
 	mod = CrossMapLRN(name="lrn")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -62,7 +63,7 @@ def groupLinearTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, groups, insize).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -76,7 +77,7 @@ def mulAddConstTest():
 	mod = MulAddConst(a=1.5, b=-2.0, name="muladd")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -92,22 +93,7 @@ def batchNormTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, size).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
-
-	outdata = mod(data)
-	enginedata = engine(data)
-
-	assert np.allclose(outdata.get(), enginedata.get())
-
-
-def conv1dTest():
-	batchsize, inmaps, insize = 2, 3, 5
-	outmaps = 4
-
-	mod = Conv1D(inmaps, outmaps, size=2, stride=2, name="conv1d", useBias=False)
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, insize).astype(np.float32))
-
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -123,7 +109,38 @@ def batchNorm1dTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, size).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
+
+	outdata = mod(data)
+	enginedata = engine(data)
+
+	assert np.allclose(outdata.get(), enginedata.get())
+
+
+def instanceNorm2dTest():
+	batchsize, maps, inh, inw = 5, 3, 4, 6
+
+	mod = InstanceNorm2D(maps, name="instnorm")
+	mod.evalMode()
+
+	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, inh, inw).astype(np.float32))
+
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
+
+	outdata = mod(data)
+	enginedata = engine(data)
+
+	assert np.allclose(outdata.get(), enginedata.get())
+
+
+def conv1dTest():
+	batchsize, inmaps, insize = 2, 3, 5
+	outmaps = 4
+
+	mod = Conv1D(inmaps, outmaps, size=2, stride=2, name="conv1d", useBias=False)
+	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, insize).astype(np.float32))
+
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -137,12 +154,12 @@ def splitTest():
 	mod = Split(axis=1, sections=(2, 4), name="split")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
 
-	assert all(np.allclose(outdat.get(), enginedat.get()) for outdat, enginedat in zip(outdata, enginedata))
+	assert all(np.allclose(od.get(), ed.get()) for od, ed in zip(outdata, enginedata))
 
 
 def rnnTest():
@@ -161,7 +178,7 @@ def rnnTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, inh, inw).astype(np.float32))
 
-	engine = buildRTEngine(seq, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(seq, data.shape, savepath="../TestData")
 
 	outdata = seq(data)
 	enginedata = engine(data)
@@ -181,7 +198,7 @@ def lstmTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, seqlen, insize).astype(np.float32))
 
-	engine = buildRTEngine(seq, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(seq, data.shape, savepath="../TestData")
 
 	outdata = seq(data)
 	enginedata = engine(data)
@@ -201,7 +218,7 @@ def gruTest():
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, seqlen, insize).astype(np.float32))
 
-	engine = buildRTEngine(seq, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(seq, data.shape, savepath="../TestData")
 
 	outdata = seq(data)
 	enginedata = engine(data)
@@ -215,7 +232,7 @@ def upsample2dTest():
 	mod = Upsample2D(scale=2, name="upsample")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -229,7 +246,7 @@ def leakyReluTest():
 	mod = Activation(leakyRelu, name="leakyrelu")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -243,7 +260,7 @@ def clipTest():
 	mod = Activation(clip, name="clip")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -257,7 +274,7 @@ def preluTest():
 	mod = PRelu(maps=maps, name="prelu")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, height, width).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -272,7 +289,7 @@ def pad1dTest():
 	mod = Pad1D(pad=(lpad, rpad), mode=PadMode.reflect, name="reflectpad")
 	data = gpuarray.to_gpu(np.random.randn(batchsize, maps, size).astype(np.float32))
 
-	engine = buildRTEngine(mod, data.shape, savepath="../TestData", dtype=DataType.float32)
+	engine = buildRTEngine(mod, data.shape, savepath="../TestData")
 
 	outdata = mod(data)
 	enginedata = engine(data)
@@ -285,10 +302,12 @@ def main():
 	crossMapLRNTest()
 	groupLinearTest()
 	mulAddConstTest()
+
 	batchNormTest()
+	batchNorm1dTest()
+	instanceNorm2dTest()
 
 	conv1dTest()
-	batchNorm1dTest()
 	splitTest()
 
 	rnnTest()

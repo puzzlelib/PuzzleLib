@@ -6,7 +6,7 @@ from PuzzleLib.Containers import Graph
 from PuzzleLib.Modules import Linear, Activation, relu, Add
 
 from PuzzleLib.Converter.TensorRT.Tests.Common import benchModels
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, DataType
+from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine
 
 
 def main():
@@ -24,10 +24,9 @@ def main():
 	outNode = Add(name="add").node(node1, node2)
 
 	graph = Graph(inputs=inNode, outputs=outNode, name="graph")
+	engine = buildRTEngine(graph, (batchsize, insize), savepath="../TestData")
 
 	data = gpuarray.to_gpu(np.random.randn(batchsize, insize).astype(np.float32))
-
-	engine = buildRTEngine(graph, (batchsize, insize), savepath="../TestData", dtype=DataType.float32)
 
 	outdata = graph(data)
 	enginedata = engine(data)

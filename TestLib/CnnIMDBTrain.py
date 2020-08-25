@@ -1,20 +1,14 @@
 from PuzzleLib.Datasets import IMDBLoader
 
-from PuzzleLib.Containers import *
-from PuzzleLib.Modules import *
-from PuzzleLib.Handlers import *
+from PuzzleLib.Containers import Sequential
+from PuzzleLib.Modules import Embedder, Dropout, SwapAxes, Conv1D, Activation, relu, MaxPool1D, Flatten, Linear
+
+from PuzzleLib.Handlers import Trainer, Validator
 from PuzzleLib.Optimizers import Adam
 from PuzzleLib.Cost import BCE
 
 
-def main():
-	numwords, maxlen, embsize = 5000, 250, 50
-
-	imdb = IMDBLoader(numwords=numwords, maxlen=maxlen)
-	data, labels, _ = imdb.load(path="../TestData/")
-	data, labels = data[:], labels[:]
-	print("Loaded IMDB")
-
+def buildNet(numwords, maxlen, embsize):
 	seq = Sequential()
 
 	seq.append(Embedder(numwords, maxlen, embsize, initscheme="uniform", wscale=0.05, learnable=True))
@@ -33,17 +27,31 @@ def main():
 	seq.append(Activation(relu))
 
 	seq.append(Linear(250, 1))
+	return seq
+
+
+def main():
+	numwords, maxlen, embsize = 5000, 250, 50
+
+	imdb = IMDBLoader(numwords=numwords, maxlen=maxlen)
+	data, labels, _ = imdb.load(path="../TestData/")
+	data, labels = data[:], labels[:]
+	print("Loaded IMDB")
+
+	net = buildNet(numwords, maxlen, embsize)
 
 	optimizer = Adam(alpha=1e-3)
-	optimizer.setupOn(seq, useGlobalState=True)
+	optimizer.setupOn(net, useGlobalState=True)
 
 	cost = BCE()
-	trainer = Trainer(seq, cost, optimizer, batchsize=32)
-	validator = Validator(seq, cost, batchsize=32)
+	trainer = Trainer(net, cost, optimizer, batchsize=32)
+	validator = Validator(net, cost, batchsize=32)
 
 	for i in range(15):
-		trainer.trainFromHost(data[:25000], labels[:25000], macroBatchSize=25000,
-							  onMacroBatchFinish=lambda train: print("Train error: %s" % train.cost.getMeanError()))
+		trainer.trainFromHost(
+			data[:25000], labels[:25000], macroBatchSize=25000,
+			onMacroBatchFinish=lambda train: print("Train error: %s" % train.cost.getMeanError())
+		)
 		print("Accuracy: %s" % (1.0 - validator.validateFromHost(data[25000:], labels[25000:], macroBatchSize=25000)))
 
 

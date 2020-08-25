@@ -87,7 +87,7 @@ def clean(rules, linkrule):
 		print("### %s '%s' ..." % ("Removed" if removed else "Skipped", rule.target), flush=True)
 
 
-class Config:
+class BuildConfig:
 	def __init__(self, rulesMap, toolchains):
 		self.rulesMap, self.toolchains = rulesMap, toolchains
 
@@ -148,8 +148,8 @@ def build(rules, linkrule, recompile=False, prevalidate=False):
 
 	configname = "%s.json" % linkrule.target
 
-	prevcfg = Config.loadFromFile(configname)
-	config = Config.loadFromRules(rules + [linkrule])
+	prevcfg = BuildConfig.loadFromFile(configname)
+	config = BuildConfig.loadFromRules(rules + [linkrule])
 
 	errors = []
 	needLinking = False

@@ -3,16 +3,16 @@ import sys
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.Basic import ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
-from PuzzleLib.Backend.Dnn.Basic import convNdbenchmark, convNd, convNdBackwardData, convNdBackwardParams
+from PuzzleLib.Backend.Dnn import ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
+from PuzzleLib.Backend.Dnn import convNdbenchmark, convNd, convNdBackwardData, convNdBackwardParams
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
 class ConvND(Module):
-	def __init__(self, nd, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True, name=None,
-				 initscheme=None, empty=False, groups=1):
+	def __init__(self, nd, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True,
+				 name=None, initscheme=None, empty=False, groups=1):
 		super().__init__(name)
 
 		self.stride = self.repeat(stride, nd)

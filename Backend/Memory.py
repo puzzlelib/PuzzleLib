@@ -26,7 +26,7 @@ def autoinit():
 def initCuda():
 	from PuzzleLib.Cuda.Backend import getBackend
 
-	backend = getBackend(Config.deviceIdx, initmode=1)
+	backend = getBackend(Config.deviceIdx, initmode=1, logger=Config.getLogger())
 	memoryPool, dnn = backend.memoryPool, backend.dnn
 
 	initGPU(memoryPool, dnn)
@@ -35,7 +35,7 @@ def initCuda():
 def initHip():
 	from PuzzleLib.Hip.Backend import getBackend
 
-	backend = getBackend(Config.deviceIdx, initmode=2)
+	backend = getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, memmod = backend.memoryPool, backend.memmod
 
 	initGPU(memoryPool, memmod)

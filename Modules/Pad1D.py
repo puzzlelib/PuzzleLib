@@ -1,8 +1,8 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels import Pad
-from PuzzleLib.Backend.Utils import dtypesSupported, memoryPool as memPool
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 from PuzzleLib.Modules.Pad2D import PadMode
@@ -42,7 +42,7 @@ class Pad1D(Module):
 			size = grad.shape[2]
 			lpad, rpad = self.pad
 
-			self.grad = grad[:, :, lpad:size - rpad].copy()
+			self.grad = grad[:, :, lpad:size - rpad].copy(allocator=memPool)
 
 		elif self.mode == PadMode.reflect:
 			self.grad = Pad.reflectpad1dBackward(grad, self.pad)
@@ -90,7 +90,7 @@ class Pad1D(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)

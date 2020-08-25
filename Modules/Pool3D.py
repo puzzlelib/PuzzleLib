@@ -1,4 +1,4 @@
-from PuzzleLib.Backend.Utils import dtypesSupported
+from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
@@ -79,7 +79,7 @@ class Pool3D(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)

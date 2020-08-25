@@ -1,6 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend.Benchmarks import timeKernel
+from PuzzleLib.Backend.gpuarray import timeKernel
 
 
 def scoreModels(net, engine, data, labels):

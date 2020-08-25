@@ -8,11 +8,11 @@ from PuzzleLib.Modules.ConvND import ConvND
 
 
 class Conv1D(ConvND):
-	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True, name=None,
-				 initscheme=None, empty=False, groups=1):
+	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True,
+				 name=None, initscheme=None, empty=False, groups=1):
 		super().__init__(
-			2, inmaps, outmaps, (1, size), (1, stride), (0, pad), (1, dilation), wscale, useBias, name, initscheme,
-			empty, groups
+			2, inmaps, outmaps, (1, size), (1, stride), (0, pad), (1, dilation), wscale, useBias,
+			name, initscheme, empty, groups
 		)
 		self.registerBlueprint(locals())
 
@@ -29,22 +29,20 @@ class Conv1D(ConvND):
 
 
 	def updateGrad(self, grad):
-		grad = grad.reshape(*grad.shape[:2], 1, *grad.shape[2:])
-
 		data = self.inData
 		self.inData = data.reshape(*data.shape[:2], 1, *data.shape[2:])
-		super().updateGrad(grad)
-		self.inData = data
 
+		super().updateGrad(grad.reshape(*grad.shape[:2], 1, *grad.shape[2:]))
+
+		self.inData = data
 		self.grad = self.grad.reshape(*self.grad.shape[:2], *self.grad.shape[3:])
 
 
 	def accGradParams(self, grad, scale=1.0, momentum=0.0):
-		grad = grad.reshape(*grad.shape[:2], 1, *grad.shape[2:])
-
 		data = self.inData
 		self.inData = data.reshape(*data.shape[:2], 1, *data.shape[2:])
-		super().accGradParams(grad, scale, momentum)
+
+		super().accGradParams(grad.reshape(*grad.shape[:2], 1, *grad.shape[2:]), scale, momentum)
 		self.inData = data
 
 
@@ -57,11 +55,11 @@ class Conv1D(ConvND):
 		if inmaps != self.W.shape[1] * self.groups:
 			raise ModuleError("Data has %d maps (expected: %d)" % (inmaps, self.W.shape[1] * self.groups))
 
-		if size + 2 * self.pad[1] < self.dilation[1] * (self.W.shape[3] - 1) + 1:
-			raise ModuleError(
-				"Data maps size is too small (got %d, expected at least %d)" %
-				(size + 2 * self.pad[1], self.dilation[1] * (self.W.shape[3] - 1) + 1)
-			)
+		extsize = size + 2 * self.pad[1]
+		extfsize = self.dilation[1] * (self.W.shape[3] - 1) + 1
+
+		if extsize < extfsize:
+			raise ModuleError("Data maps size is too small (got %d, expected at least %d)" % (extsize, extfsize))
 
 
 	def dataShapeFrom(self, shape):
@@ -73,7 +71,6 @@ class Conv1D(ConvND):
 		_, stride = self.stride
 
 		outsize = (insize + 2 * pad - dilation * (fsize - 1) - 1) // stride + 1
-
 		return batchsize, outmaps, outsize
 
 
@@ -111,15 +108,18 @@ def multiMapsWithPadsTest():
 	batchsize, inmaps, size = 5, 4, 3
 	outmaps, fsize, stride, pad, dilation = 4, 2, 2, 2, 2
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, size).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, size).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	conv = Conv1D(inmaps, outmaps, size=fsize, stride=stride, pad=pad, dilation=dilation, initscheme="gaussian")
 	conv(data)
 
 	hostW, hostBias = conv.W.get(), conv.b.get()
 
-	hostData = np.zeros(shape=(batchsize, inmaps, size + 2 * pad))
-	hostData[:, :, pad:-pad] = data.get()
+	hostExtData = np.zeros(shape=(batchsize, inmaps, size + 2 * pad))
+
+	hostExtData[:, :, pad:-pad] = hostData
+	hostData = hostExtData
 
 	hostOutData = np.empty(conv.data.shape, dtype=np.float32)
 	for c in range(outmaps):
@@ -134,10 +134,11 @@ def multiMapsWithPadsTest():
 
 	assert np.allclose(hostOutData, conv.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*conv.data.shape).astype(np.float32))
-	conv.backward(grad)
+	hostGrad = np.random.randn(*conv.data.shape).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostGrad, hostInGrad = grad.get(), np.zeros(hostData.shape, dtype=np.float32)
+	conv.backward(grad)
+	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 
 	for b in range(batchsize):
 		for ic in range(inmaps):

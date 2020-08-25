@@ -3,7 +3,6 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported
 from PuzzleLib.Backend.Kernels.ElementWise import toVectorAddVectorKer
 
 from PuzzleLib.Optimizers.Optimizer import Optimizer, trainSimpleTest, trainHardTest
@@ -20,7 +19,7 @@ class SGD(Optimizer):
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
+	for dtype, atol in gpuarray.dtypesSupported():
 		calcTest(dtype, atol)
 		trainSimpleTest(SGD, dtype, learnRate=1e-1)
 

@@ -203,36 +203,53 @@ static PyObject *Cuda_Buffer_pyFree(PyObject *self, PyObject *args)
 }
 
 
-PyDoc_STRVAR(Cuda_Buffer_get_doc, "get(self) -> numpy.ndarray");
-static PyObject *Cuda_Buffer_get(PyObject *self, PyObject *args)
+static PyObject *Cuda_Buffer_pyGet(Cuda_Buffer *self, Cuda_Stream *stream)
 {
-	(void)args;
-	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
-
 	npy_intp dims[1];
-	dims[0] = pybuf->size;
+	dims[0] = self->size;
 
 	PyArrayObject *ary = (PyArrayObject *)PyArray_EMPTY(1, dims, NPY_UBYTE, 0);
 	if (ary == NULL)
 		goto error_1;
 
-	CU_CHECK(cuMemcpyDtoH(PyArray_DATA(ary), (CUdeviceptr)pybuf->ptr, pybuf->size), goto error_2);
+	if (!Cuda_Buffer_get(self, PyArray_DATA(ary), (size_t)-1, stream))
+		goto error_2;
+
 	return (PyObject *)ary;
 
 error_2:
 	Py_DECREF(ary);
-
 error_1:
 	return NULL;
 }
 
 
-PyDoc_STRVAR(Cuda_Buffer_set_doc, "set(self, ary)");
-static PyObject *Cuda_Buffer_set(PyObject *self, PyObject *args)
+PyDoc_STRVAR(Cuda_Buffer_pyUnpackGet_doc, "get(self, stream=None) -> numpy.ndarray");
+static PyObject *Cuda_Buffer_pyUnpackGet(PyObject *self, PyObject *args, PyObject *kwds)
 {
-	PyArrayObject *ary;
+	const char *kwlist[] = {"stream", NULL};
 
-	if (!PyArg_ParseTuple(args, "O!", &PyArray_Type, &ary))
+	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
+	Cuda_Stream *stream = NULL;
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "|$O!", (char **)kwlist, Cuda_Stream_Type, &stream))
+		return NULL;
+
+	return Cuda_Buffer_pyGet(pybuf, stream);
+}
+
+
+PyDoc_STRVAR(Cuda_Buffer_pySet_doc, "set(self, ary, stream=None)");
+static PyObject *Cuda_Buffer_pySet(PyObject *self, PyObject *args, PyObject *kwds)
+{
+	const char *kwlist[] = {"stream", NULL};
+
+	PyArrayObject *ary;
+	Cuda_Stream *stream = NULL;
+
+	if (!PyArg_ParseTupleAndKeywords(
+		args, kwds, "O!|$O!", (char **)kwlist, &PyArray_Type, &ary, Cuda_Stream_Type, &stream
+	))
 		return NULL;
 
 	size_t nbytes = PyArray_NBYTES(ary);
@@ -253,30 +270,40 @@ static PyObject *Cuda_Buffer_set(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	CU_ENFORCE(cuMemcpyHtoD((CUdeviceptr)pybuf->ptr, PyArray_DATA(ary), pybuf->size));
-	Py_RETURN_NONE;
-}
-
-
-PyDoc_STRVAR(Cuda_Buffer_fillD8_doc, "fillD8(self, byte)");
-static PyObject *Cuda_Buffer_fillD8(PyObject *self, PyObject *args)
-{
-	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
-	unsigned char uc;
-
-	if (!PyArg_ParseTuple(args, "B", &uc))
+	if (!Cuda_Buffer_set(pybuf, PyArray_DATA(ary), (size_t)-1, stream))
 		return NULL;
 
-	CU_ENFORCE(cuMemsetD8((CUdeviceptr)pybuf->ptr, uc, pybuf->size));
 	Py_RETURN_NONE;
 }
 
 
-PyDoc_STRVAR(Cuda_Buffer_fillD16_doc, "fillD16(self, word)");
-static PyObject *Cuda_Buffer_fillD16(PyObject *self, PyObject *args)
+PyDoc_STRVAR(Cuda_Buffer_pyFillD8_doc, "fillD8(self, byte, stream=None)");
+static PyObject *Cuda_Buffer_pyFillD8(PyObject *self, PyObject *args, PyObject *kwds)
 {
+	const char *kwlist[] = {"byte", "stream", NULL};
 	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
+
+	unsigned char byte;
+	Cuda_Stream *stream = NULL;
+
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "B|$O!", (char **)kwlist, &byte, Cuda_Stream_Type, &stream))
+		return NULL;
+
+	if (!Cuda_Buffer_fillD8(pybuf, byte, (size_t)-1, stream))
+		return NULL;
+
+	Py_RETURN_NONE;
+}
+
+
+PyDoc_STRVAR(Cuda_Buffer_fillD16_doc, "fillD16(self, word, stream=None)");
+static PyObject *Cuda_Buffer_fillD16(PyObject *self, PyObject *args, PyObject *kwds)
+{
+	const char *kwlist[] = {"word", "stream", NULL};
+	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
+
 	unsigned short us;
+	Cuda_Stream *stream = NULL;
 
 	if (pybuf->size % 2 != 0)
 	{
@@ -284,19 +311,29 @@ static PyObject *Cuda_Buffer_fillD16(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	if (!PyArg_ParseTuple(args, "H", &us))
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "H|$O!", (char **)kwlist, &us, Cuda_Stream_Type, &stream))
 		return NULL;
 
-	CU_ENFORCE(cuMemsetD16((CUdeviceptr)pybuf->ptr, us, pybuf->size / 2));
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemsetD16((CUdeviceptr)pybuf->ptr, us, pybuf->size / 2);
+	else
+		status = cuMemsetD16Async((CUdeviceptr)pybuf->ptr, us, pybuf->size / 2, stream->stream);
+
+	CU_ENFORCE(status);
 	Py_RETURN_NONE;
 }
 
 
-PyDoc_STRVAR(Cuda_Buffer_fillD32_doc, "fillD32(self, dword)");
-static PyObject *Cuda_Buffer_fillD32(PyObject *self, PyObject *args)
+PyDoc_STRVAR(Cuda_Buffer_fillD32_doc, "fillD32(self, dword, stream=None)");
+static PyObject *Cuda_Buffer_fillD32(PyObject *self, PyObject *args, PyObject *kwds)
 {
+	const char *kwlist[] = {"dword", "stream", NULL};
 	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
+
 	unsigned int ui;
+	Cuda_Stream *stream = NULL;
 
 	if (pybuf->size % 4 != 0)
 	{
@@ -304,18 +341,28 @@ static PyObject *Cuda_Buffer_fillD32(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	if (!PyArg_ParseTuple(args, "I", &ui))
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "I|$O!", (char **)kwlist, &ui, Cuda_Stream_Type, &stream))
 		return NULL;
 
-	CU_ENFORCE(cuMemsetD32((CUdeviceptr)pybuf->ptr, ui, pybuf->size / 4));
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemsetD32((CUdeviceptr)pybuf->ptr, ui, pybuf->size / 4);
+	else
+		status = cuMemsetD32Async((CUdeviceptr)pybuf->ptr, ui, pybuf->size / 4, stream->stream);
+
+	CU_ENFORCE(status);
 	Py_RETURN_NONE;
 }
 
 
-PyDoc_STRVAR(Cuda_Buffer_copy_doc, "copy(self, dst=None, allocator=None) -> " CUDA_DRIVER_NAME "." CUDA_BUFFER_OBJNAME);
-static PyObject *Cuda_Buffer_copy(PyObject *self, PyObject *args, PyObject *kwds)
+PyDoc_STRVAR(
+	Cuda_Buffer_pyCopy_doc, "copy(self, dst=None, allocator=None) -> " CUDA_DRIVER_NAME "." CUDA_BUFFER_OBJNAME
+);
+static PyObject *Cuda_Buffer_pyCopy(PyObject *self, PyObject *args, PyObject *kwds)
 {
 	const char *kwlist[] = {"dst", "allocator", NULL};
+	Cuda_Buffer *pybuf = (Cuda_Buffer *)self;
 
 	Cuda_Buffer *dst = NULL;
 	Cuda_MemoryPool *allocator = NULL;
@@ -325,13 +372,13 @@ static PyObject *Cuda_Buffer_copy(PyObject *self, PyObject *args, PyObject *kwds
 	))
 		goto error_1;
 
-	Cuda_Buffer *pybuf; pybuf = (Cuda_Buffer *)self;
-	size_t nbytes; nbytes = pybuf->size;
-
 	if (dst == NULL)
-		dst = (allocator != NULL) ? Cuda_MemoryPool_allocate(allocator, nbytes) :
-			Cuda_Driver_allocateWithKnownDevice(nbytes, pybuf->device);
-
+	{
+		if (allocator != NULL)
+			dst = Cuda_MemoryPool_allocate(allocator, pybuf->size);
+		else
+			dst = Cuda_Driver_allocateWithKnownDevice(pybuf->size, pybuf->device);
+	}
 	else
 	{
 		if (pybuf->size != dst->size)
@@ -349,12 +396,13 @@ static PyObject *Cuda_Buffer_copy(PyObject *self, PyObject *args, PyObject *kwds
 	if (dst == NULL)
 		goto error_1;
 
-	CU_CHECK(cuMemcpyDtoD((CUdeviceptr)dst->ptr, (CUdeviceptr)pybuf->ptr, nbytes), goto error_2);
+	if (!Cuda_Buffer_copy(pybuf, dst, (size_t)-1, NULL))
+		goto error_2;
+
 	return (PyObject *)dst;
 
 error_2:
 	Py_DECREF(dst);
-
 error_1:
 	return NULL;
 }
@@ -422,7 +470,7 @@ static PyObject *Cuda_Buffer_toString(PyObject *self)
 	CUDA_CHECK(cudaGetDevice(&device), goto error_1);
 	CUDA_CHECK(cudaSetDevice(pybuf->device), goto error_1);
 
-	PyObject *ary; ary = Cuda_Buffer_get(self, NULL);
+	PyObject *ary; ary = Cuda_Buffer_pyGet(pybuf, NULL);
 	if (ary == NULL)
 		goto error_2;
 
@@ -477,14 +525,14 @@ static PyMemberDef Cuda_Buffer_members[] = {
 static PyMethodDef Cuda_Buffer_methods[] = {
 	{"free", Cuda_Buffer_pyFree, METH_NOARGS, Cuda_Buffer_pyFree_doc},
 
-	{"get", Cuda_Buffer_get, METH_NOARGS, Cuda_Buffer_get_doc},
-	{"set", Cuda_Buffer_set, METH_VARARGS, Cuda_Buffer_set_doc},
+	{"get", (PyCFunction)Cuda_Buffer_pyUnpackGet, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_pyUnpackGet_doc},
+	{"set", (PyCFunction)Cuda_Buffer_pySet, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_pySet_doc},
 
-	{"fillD8", Cuda_Buffer_fillD8, METH_VARARGS, Cuda_Buffer_fillD8_doc},
-	{"fillD16", Cuda_Buffer_fillD16, METH_VARARGS, Cuda_Buffer_fillD16_doc},
-	{"fillD32", Cuda_Buffer_fillD32, METH_VARARGS, Cuda_Buffer_fillD32_doc},
+	{"fillD8", (PyCFunction)Cuda_Buffer_pyFillD8, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_pyFillD8_doc},
+	{"fillD16", (PyCFunction)Cuda_Buffer_fillD16, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_fillD16_doc},
+	{"fillD32", (PyCFunction)Cuda_Buffer_fillD32, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_fillD32_doc},
 
-	{"copy", (PyCFunction)Cuda_Buffer_copy, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_copy_doc},
+	{"copy", (PyCFunction)Cuda_Buffer_pyCopy, METH_VARARGS | METH_KEYWORDS, Cuda_Buffer_pyCopy_doc},
 	{"getIPCHandle", Cuda_Buffer_getIPCHandle, METH_NOARGS, Cuda_Buffer_getIPCHandle_doc},
 
 	{NULL, NULL, 0, NULL}

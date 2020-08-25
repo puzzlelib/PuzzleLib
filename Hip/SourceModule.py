@@ -1,7 +1,7 @@
 import os, tempfile, subprocess
 from string import Template
 
-from PuzzleLib.Config import libname, Backend, systemLog
+from PuzzleLib import Config
 from PuzzleLib.Compiler.JIT import getCacheDir, computeHash, FileLock
 
 from PuzzleLib.Cuda.SourceModule import SourceModule, ElementwiseKernel, ElementHalf2Kernel, ReductionKernel
@@ -37,7 +37,7 @@ class HipSourceModule(SourceModule):
 		source = self.source.replace("cuda_fp16.h", "hip/hip_fp16.h")
 		source = ("%sextern \"C\"\n{\n%s\n}\n" if self.externC else "%s%s") % (self.runtimeHeader, source)
 
-		cachedir = getCacheDir(os.path.join(libname, Backend.hip.name))
+		cachedir = getCacheDir(os.path.join(Config.libname, Config.Backend.hip.name))
 
 		with FileLock(cachedir):
 			try:
@@ -74,11 +74,7 @@ class HipSourceModule(SourceModule):
 			args = ["hipcc", "--genco"] + options + ["-o", codename]
 			stderr = subprocess.STDOUT if self.verbose else subprocess.DEVNULL
 
-			if systemLog:
-				print(
-					"[%s] No cache found for HIP extension '%s', performing compilation ..." %
-					(libname, name), flush=True
-				)
+			Config.getLogger().debug("No cache found for HIP extension '%s', performing compilation ...", name)
 
 			if not self.debug:
 				f = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=srcext, delete=False)
@@ -98,11 +94,7 @@ class HipSourceModule(SourceModule):
 				subprocess.check_output(args + [sourcename], stderr=stderr)
 
 		else:
-			if systemLog:
-				print(
-					"[%s] Found cached compilation for HIP extension '%s', skipping compilation ..." %
-					(libname, name), flush=True
-				)
+			Config.getLogger().debug("Found cached compilation for HIP extension '%s', skipping compilation ...", name)
 
 		return codename
 

@@ -49,7 +49,7 @@ def runModuleTest(mod, path, threshold=20):
 
 
 def runUnittests(filenames, basepath, threshold=20):
-	from PuzzleLib.Backend.Utils import setupDebugAllocator
+	from PuzzleLib.Backend.gpuarray import setupDebugAllocator
 
 	print("Setting debug allocator ...")
 	setupDebugAllocator()

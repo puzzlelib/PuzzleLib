@@ -3,7 +3,6 @@ import string
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
 
 from PuzzleLib.Containers.Sequential import Sequential
 from PuzzleLib.Containers.Parallel import Parallel
@@ -129,19 +128,19 @@ def unittest():
 	res(data)
 
 	del res
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 	res = loadResNet(None, layers="101", initscheme="gaussian")
 	res(data)
 
 	del res
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 	res = loadResNet(None, layers="152", initscheme="gaussian")
 	res(data)
 
 	del res
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

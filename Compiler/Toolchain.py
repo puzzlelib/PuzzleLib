@@ -66,22 +66,28 @@ def copySource(src, dst):
 	os.chmod(dst, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
 
 
-def buildTemplateTest(name, path, bindingName, generator, verbose=2, debuglevel=0, level=4, defines=None, **kwargs):
+def buildTemplateTest(name, path, bindingName, generator, verbose=2, debuglevel=0, level=4, defines=None, libs=None,
+					  **kwargs):
 	sources = generator(name=name, filename=os.path.join(path, name), **kwargs)
+
+	binding = os.path.join(path, bindingName)
+	copySource(bindingName, binding)
+
+	sources = [sources, binding] if isinstance(sources, str) else list(sources) + [binding]
+	return compileTemplateTest(os.path.join(path, name), sources, verbose, debuglevel, level, defines, libs)
+
+
+def compileTemplateTest(modname, sources, verbose=2, debuglevel=0, level=4, defines=None, libs=None):
 	cc = guessToolchain(verbose=verbose).withOptimizationLevel(debuglevel=debuglevel, level=level)
 
 	defines = [] if defines is None else defines
 	cc.addDefine(*defines)
 
-	binding = os.path.join(path, bindingName)
-	if os.path.exists(binding):
-		os.chmod(binding, stat.S_IWUSR | stat.S_IREAD)
+	libs = [] if libs is None else libs
+	for name, includeDirs, libraryDirs, libraries in libs:
+		cc.addLibrary(name, includeDirs, libraryDirs, libraries)
 
-	shutil.copy(bindingName, binding)
-	os.chmod(binding, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+	modname = modname + cc.pydext
 
-	sources = sources + [binding] if isinstance(sources, list) else [sources, binding]
-	modname = os.path.join(path, name + cc.pydext)
-
-	cc.build(modname, sources).clearPath(path)
+	cc.build(modname, sources).clearPath(os.path.dirname(modname))
 	return loadDynamicModule(modname)

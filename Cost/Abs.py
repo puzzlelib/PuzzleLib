@@ -1,8 +1,7 @@
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
-from PuzzleLib.Backend import Blas
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import l1gradKer
 
 from PuzzleLib.Cost.Cost import Cost

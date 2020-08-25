@@ -7,7 +7,8 @@ Config.globalEvalMode = True
 
 from PuzzleLib.Backend import gpuarray
 
-from PuzzleLib.Containers import Sequential, Parallel
+from PuzzleLib.Containers.Sequential import Sequential
+from PuzzleLib.Containers.Parallel import Parallel
 
 from PuzzleLib.Modules.BatchNorm import BatchNorm
 from PuzzleLib.Modules.Concat import Concat

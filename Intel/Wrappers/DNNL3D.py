@@ -140,7 +140,7 @@ def batchNorm3dTest():
 	mean = CPUArray.zeros(scale.shape, dtype=np.float32)
 	var = CPUArray.toDevice(np.ones(scale.shape, dtype=np.float32))
 
-	outdata = CPUArray.copy(data)
+	outdata = data.copy()
 	outdata, savemean, savevar, desc = batchNormNd(outdata, scale, bias, mean, var, out=outdata)
 
 	hostScale, hostBias = scale.get(), bias.get()

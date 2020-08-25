@@ -13,6 +13,7 @@ from PuzzleLib.Modules.AvgPool2D import AvgPool2D
 from PuzzleLib.Modules.BatchNorm import BatchNorm
 from PuzzleLib.Modules.BatchNorm1D import BatchNorm1D
 from PuzzleLib.Modules.BatchNorm2D import BatchNorm2D
+from PuzzleLib.Modules.InstanceNorm2D import InstanceNorm2D
 from PuzzleLib.Modules.Concat import Concat
 from PuzzleLib.Modules.Conv1D import Conv1D
 from PuzzleLib.Modules.Conv2D import Conv2D
@@ -39,72 +40,63 @@ from PuzzleLib.Modules.Upsample2D import Upsample2D
 
 from PuzzleLib.Converter.TensorRT import Driver
 from PuzzleLib.Converter.TensorRT.DataCalibrator import CalibratorError
-from PuzzleLib.Converter.TensorRT.RTEngine import RTEngine, DataType, RTEngineType, genEngineName
+from PuzzleLib.Converter.TensorRT.RTEngine import RTEngine, RTDataType, genEngineName
 
 
 class ConverterError(Exception):
 	pass
 
 
-def buildRTEngine(net, inshape, savepath, dtype, calibrator=None, workspace=1 << 30, returnEngine=True, log=True):
-	outshape = net.dataShapeFrom(inshape)
-	batchsize, inshape = inshape[0], inshape[1:]
+def buildRTEngine(net, inshape, savepath, dtype=RTDataType.float32, name=None, calibrator=None,
+				  workspace=1 << 30, returnEngine=True, log=True):
+	savepath = os.path.join(savepath, genEngineName(net.name if name is None else name, dtype))
 
-	engineName = genEngineName(net.name, dtype, (batchsize, ) + inshape, outshape)
-	savepath = os.path.join(savepath, engineName)
+	inshape = inshape if isinstance(inshape, list) else [inshape]
+	buildRTEngineFromPuzzle(net, inshape[0][0], [sh[1:] for sh in inshape], dtype, calibrator, workspace, savepath, log)
 
-	convert(net, batchsize, inshape, dtype, calibrator, workspace, savepath, log)
-
-	if returnEngine:
-		return RTEngine(savepath, RTEngineType.puzzle, (batchsize, ) + inshape, outshape, log)
+	return RTEngine(savepath, log) if returnEngine else None
 
 
-def buildRTEngineFromCaffe(model, inshape, outshape, outlayers, savepath, dtype, calibrator=None, workspace=1 << 22,
-						   returnEngine=True, log=True):
+def buildRTEngineFromCaffe(model, batchsize, outlayers, savepath, dtype=RTDataType.float32, name=None, calibrator=None,
+						   workspace=1 << 30, returnEngine=True, log=True):
 	prototxt, caffemodel = model
+	name = os.path.splitext(os.path.basename(caffemodel))[0] if name is None else name
 
-	engineName = genEngineName(os.path.splitext(os.path.basename(caffemodel))[0], dtype, inshape, outshape)
-	savepath = os.path.join(savepath, engineName)
-
-	batchsize, inshape = inshape[0], inshape[1:]
+	savepath = os.path.join(savepath, genEngineName(name, dtype))
 	Driver.buildRTEngineFromCaffe(
 		prototxt, caffemodel, batchsize, outlayers, dtype, calibrator, workspace, savepath, log
 	)
 
-	if returnEngine:
-		return RTEngine(savepath, RTEngineType.caffe, (batchsize, ) + inshape, outshape, log)
+	return RTEngine(savepath, log) if returnEngine else None
 
 
-def buildRTEngineFromOnnx(model, inshape, outshape, savepath, dtype, calibrator=None, workspace=1 << 22,
-						  returnEngine=True, log=True):
-	engineName = genEngineName(os.path.splitext(os.path.basename(model))[0], dtype, inshape, outshape)
-	savepath = os.path.join(savepath, engineName)
+def buildRTEngineFromOnnx(model, batchsize, savepath, dtype=RTDataType.float32, name=None, calibrator=None,
+						  workspace=1 << 30, returnEngine=True, log=True):
+	name = os.path.splitext(os.path.basename(model))[0] if name is None else name
 
-	batchsize, inshape = inshape[0], inshape[1:]
+	savepath = os.path.join(savepath, genEngineName(name, dtype))
 	Driver.buildRTEngineFromOnnx(model, batchsize, dtype, calibrator, workspace, savepath, log)
 
-	if returnEngine:
-		return RTEngine(savepath, RTEngineType.onnx, (batchsize, ) + inshape, outshape, log)
+	return RTEngine(savepath, log) if returnEngine else None
 
 
-def convert(net, batchsize, inshape, dtype, calibrator, workspace, savepath, log):
+def buildRTEngineFromPuzzle(net, batchsize, inshape, dtype, calibrator, workspace, savepath, log):
 	graph = Driver.createNetwork(log)
 
-	if dtype == DataType.float16:
+	if dtype == RTDataType.float16:
 		if not graph.platformHasFastFp16():
 			raise ConverterError("Platform has no fast fp16 support")
 
 		graph.setFp16Mode(True)
 
-	elif dtype == DataType.int8:
+	elif dtype == RTDataType.int8:
 		if not graph.platformHasFastInt8():
 			raise ConverterError("Platform has no fast int8 support")
 
 		graph.setInt8Mode(True)
 		graph.setInt8Calibrator(calibrator)
 
-	if not isinstance(inshape, list):
-		inshape = [inshape]
+	inshape = [inshape] if not isinstance(inshape, list) else inshape
 
 	if calibrator is not None:
 		calshape = calibrator.getDataShape()
@@ -113,12 +105,10 @@ def convert(net, batchsize, inshape, dtype, calibrator, workspace, savepath, log
 		if calshape != inshape[0]:
 			raise CalibratorError("Calibrator data has shape %s, network has input shape %s" % (calshape, inshape[0]))
 
-	inputs = []
-	for i, shape in enumerate(inshape):
-		inputs.append(graph.addInput("data_%s" % i, DataType.float32, shape))
+	inputs = [graph.addInput("data_%s" % i, RTDataType.float32, shape) for i, shape in enumerate(inshape)]
 
-	holder = []
-	output = convertModule(net, net.name, graph, inputs, holder)
+	paramHolder = []
+	output = convertModule(net, net.name, graph, inputs, paramHolder)
 
 	for i, out in enumerate(output):
 		out.setName("output_%s" % i)
@@ -134,16 +124,16 @@ def numpyPtr(ary):
 	return ary.__array_interface__["data"][0]
 
 
-def convertModule(module, fullname, graph, inputs, holder):
+def convertModule(module, fullname, graph, inputs, paramHolder):
 	if isinstance(module, Container):
 		if isinstance(module, Sequential):
-			return convertSequential(module, fullname, graph, inputs, holder)
+			return convertSequential(module, fullname, graph, inputs, paramHolder)
 
 		elif isinstance(module, Parallel):
-			return convertParallel(module, fullname, graph, inputs, holder)
+			return convertParallel(module, fullname, graph, inputs, paramHolder)
 
 		elif isinstance(module, Graph):
-			return convertGraph(module, fullname, graph, inputs, holder)
+			return convertGraph(module, fullname, graph, inputs, paramHolder)
 
 		else:
 			raise NotImplementedError(module.__class__.__name__)
@@ -158,16 +148,19 @@ def convertModule(module, fullname, graph, inputs, holder):
 		inp = inputs[0]
 
 		if isinstance(module, (Conv2D, Deconv2D)):
-			return convertConv2D(module, fullname, graph, inp, holder)
+			return convertConv2D(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, BatchNorm2D):
-			return convertBatchNorm2D(module, fullname, graph, inp, holder)
-
-		elif isinstance(module, Conv1D):
-			return convertConv1D(module, fullname, graph, inp, holder)
+			return convertBatchNorm2D(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, BatchNorm1D):
-			return convertBatchNorm1D(module, fullname, graph, inp, holder)
+			return convertBatchNorm1D(module, fullname, graph, inp, paramHolder)
+
+		elif isinstance(module, InstanceNorm2D):
+			return convertInstanceNorm2D(module, fullname, graph, inp, paramHolder)
+
+		elif isinstance(module, Conv1D):
+			return convertConv1D(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, Activation):
 			return convertActivation(module, fullname, graph, inp)
@@ -188,7 +181,7 @@ def convertModule(module, fullname, graph, inputs, holder):
 			return convertFlatten(inp, fullname, graph)
 
 		elif isinstance(module, Linear):
-			return convertLinear(module, fullname, graph, inp, holder)
+			return convertLinear(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, SoftMax):
 			return convertSoftmax(fullname, graph, inp)
@@ -206,25 +199,25 @@ def convertModule(module, fullname, graph, inputs, holder):
 			return convertReshape(module, fullname, graph, inp)
 
 		elif isinstance(module, GroupLinear):
-			return convertGroupLinear(module, fullname, graph, inp, holder)
+			return convertGroupLinear(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, MulAddConst):
-			return convertMulAddConst(module, fullname, graph, inp, holder)
+			return convertMulAddConst(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, BatchNorm):
-			return convertBatchNorm(module, fullname, graph, inp, holder)
+			return convertBatchNorm(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, Sum):
 			return convertSum(module, fullname, graph, inp)
 
 		elif isinstance(module, RNN):
-			return convertRNN(module, fullname, graph, inp, holder)
+			return convertRNN(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, Upsample2D):
 			return convertUpsample2D(module, fullname, graph, inp)
 
 		elif isinstance(module, PRelu):
-			return convertPRelu(module, fullname, graph, inp, holder)
+			return convertPRelu(module, fullname, graph, inp, paramHolder)
 
 		elif isinstance(module, Pad1D):
 			return convertPad1D(module, fullname, graph, inp)
@@ -233,43 +226,43 @@ def convertModule(module, fullname, graph, inputs, holder):
 			raise NotImplementedError(module.__class__.__name__)
 
 
-def convertSequential(seq, fullname, graph, inputs, holder):
+def convertSequential(seq, fullname, graph, inputs, paramHolder):
 	for child in seq.graph:
 		name = None if child.name is None else "%s.%s" % (fullname, child.name)
-		inputs = convertModule(child, name, graph, inputs, holder)
+		inputs = convertModule(child, name, graph, inputs, paramHolder)
 
 	return inputs
 
 
-def convertParallel(parallel, fullname, graph, inputs, holder):
+def convertParallel(parallel, fullname, graph, inputs, paramHolder):
 	assert len(inputs) == len(parallel.graph)
 
 	outputs = []
 	for i, child in enumerate(parallel.graph):
 		name = None if child.name is None else "%s.%s" % (fullname, child.name)
-		outputs.append(convertModule(child, name, graph, [inputs[i]], holder)[0])
+		outputs.append(convertModule(child, name, graph, [inputs[i]], paramHolder)[0])
 
 	return outputs
 
 
-def convertNode(node, fullname, graph, inputs, nodes, holder):
+def convertNode(node, fullname, graph, inputs, nodes, paramHolder):
 	name = None if node.name is None else "%s.%s" % (fullname, node.name)
 	inputs = [inputs[node.name]] if len(node.bwds) == 0 else [nodes[output.name] for output, _ in node.bwds]
 
-	outputs = convertModule(node.module, name, graph, inputs, holder)
+	outputs = convertModule(node.module, name, graph, inputs, paramHolder)
 	assert len(outputs) == 1
 
 	nodes[node.name] = outputs[0]
 
 
-def convertGraph(hostgraph, fullname, devgraph, inputs, holder):
+def convertGraph(hostgraph, fullname, devgraph, inputs, paramHolder):
 	assert len(inputs) == len(hostgraph.inputs)
 
 	nodes = {}
 	inputs = {node.name: inputs[i] for i, node in enumerate(hostgraph.inputs)}
 
 	for i, inp in enumerate(hostgraph.inputs):
-		inp.traverseForward(inp, convertNode, fullname, devgraph, inputs, nodes, holder)
+		inp.traverseForward(inp, convertNode, fullname, devgraph, inputs, nodes, paramHolder)
 
 	hostgraph.reset()
 	outputs = [nodes[output.name] for output in hostgraph.outputs]
@@ -291,31 +284,40 @@ def convertConcat(module, fullname, graph, inputs):
 	return [output]
 
 
-def convertConv2D(module, fullname, graph, inp, holder):
+def convertConv2D(module, fullname, graph, inp, paramHolder):
 	assert module.groups == 1
-	assert not isinstance(module, Deconv2D) or module.dilation == (1, 1)
+
+	if isinstance(module, Deconv2D):
+		assert module.dilation == (1, 1)
+
+		isDeconvolution = True
+		outmaps = module.W.shape[1]
+		postpad = module.postpad
+
+	else:
+		isDeconvolution = False
+		outmaps = module.W.shape[0]
+		postpad = (0, 0)
 
 	W = module.W.get().flatten()
-	holder.append(W)
+	paramHolder.append(W)
 
 	b = module.b.get().flatten() if module.useBias else None
 	if b is None:
 		bptr, bsize = 0, 0
 	else:
 		bptr, bsize = numpyPtr(b), b.size
-		holder.append(b)
-
-	isDeconvolution = True if isinstance(module, Deconv2D) else False
-	outmaps = module.W.shape[1] if isDeconvolution else module.W.shape[0]
+		paramHolder.append(b)
 
 	output = graph.addConvolution(
 		inp, outmaps, module.W.shape[2:], numpyPtr(W), W.size, bptr, bsize, module.stride, module.pad, module.dilation,
-		isDeconvolution, fullname
+		postpad, isDeconvolution, fullname
 	)
+
 	return [output]
 
 
-def convertBatchNorm2D(module, fullname, graph, inp, holder):
+def convertBatchNorm2D(module, fullname, graph, inp, paramHolder):
 	mean = module.mean.get()
 	var = module.var.get()
 
@@ -328,33 +330,42 @@ def convertBatchNorm2D(module, fullname, graph, inp, holder):
 	scale = (scale / np.sqrt(var + eps)).flatten()
 	power = np.ones(mean.shape, dtype=mean.dtype).flatten()
 
-	holder.extend([shift, scale, power])
+	paramHolder.extend([shift, scale, power])
 	output = graph.addScale(inp, numpyPtr(shift), numpyPtr(scale), numpyPtr(power), shift.size, fullname)
 
 	return [output]
 
 
-def convertConv1D(module, fullname, graph, inp, holder):
+def convertBatchNorm1D(module, fullname, graph, inp, paramHolder):
 	shape = tuple(inp.shape)
 	assert len(shape) == 2
 
 	output = graph.addReshape(inp, (shape[0], 1, shape[1]), "%s_inshape" % fullname)
-	[output] = convertConv2D(module, fullname, graph, output, holder)
+	[output] = convertBatchNorm2D(module, fullname, graph, output, paramHolder)
 
-	shape = output.shape
-	output = graph.addReshape(output, (shape[0], shape[2]), "%s_outshape" % fullname)
+	output = graph.addReshape(output, shape, "%s_outshape" % fullname)
+	return [output]
+
+
+def convertInstanceNorm2D(module, fullname, graph, inp, paramHolder):
+	scale, bias = module.scale.get(), module.bias.get()
+
+	paramHolder.extend([scale, bias])
+	output = graph.addInstanceNorm(inp, numpyPtr(scale), numpyPtr(bias), scale.size, module.epsilon, fullname)
 
 	return [output]
 
 
-def convertBatchNorm1D(module, fullname, graph, inp, holder):
+def convertConv1D(module, fullname, graph, inp, paramHolder):
 	shape = tuple(inp.shape)
 	assert len(shape) == 2
 
 	output = graph.addReshape(inp, (shape[0], 1, shape[1]), "%s_inshape" % fullname)
-	[output] = convertBatchNorm2D(module, fullname, graph, output, holder)
+	[output] = convertConv2D(module, fullname, graph, output, paramHolder)
 
-	output = graph.addReshape(output, shape, "%s_outshape" % fullname)
+	shape = output.shape
+	output = graph.addReshape(output, (shape[0], shape[2]), "%s_outshape" % fullname)
+
 	return [output]
 
 
@@ -406,16 +417,16 @@ def convertFlatten(inp, fullname, graph):
 	return [output]
 
 
-def convertLinear(module, fullname, graph, inp, holder):
+def convertLinear(module, fullname, graph, inp, paramHolder):
 	W = module.W.get().T.flatten()
-	holder.append(W)
+	paramHolder.append(W)
 
 	b = module.b.get().flatten() if module.useBias else None
 	if b is None:
 		bptr, bsize = 0, 0
 	else:
 		bptr, bsize = numpyPtr(b), b.size
-		holder.append(b)
+		paramHolder.append(b)
 
 	output = graph.addLinear(inp, module.W.shape[1], numpyPtr(W), W.size, bptr, bsize, fullname)
 	return [output]
@@ -460,14 +471,14 @@ def convertReshape(module, fullname, graph, inp):
 	return [output]
 
 
-def convertGroupLinear(module, fullname, graph, inp, holder):
+def convertGroupLinear(module, fullname, graph, inp, paramHolder):
 	assert module.inmode == "full" and module.wmode == "one"
 	assert not module.transpW
 
 	groups = inp.shape[0]
 
 	W = module.W.get()[0].flatten()
-	holder.append(W)
+	paramHolder.append(W)
 
 	b = module.b.get().flatten() if module.useBias else None
 	if b is None:
@@ -476,7 +487,7 @@ def convertGroupLinear(module, fullname, graph, inp, holder):
 		b = np.tile(b, reps=groups)
 		bptr, bsize = numpyPtr(b), b.size
 
-		holder.append(b)
+		paramHolder.append(b)
 
 	output = graph.addGroupLinear(
 		inp, groups, module.W.shape[1], module.W.shape[2], numpyPtr(W), W.size, bptr, b.size, fullname
@@ -484,25 +495,25 @@ def convertGroupLinear(module, fullname, graph, inp, holder):
 	return [output]
 
 
-def convertMulAddConst(module, fullname, graph, inp, holder):
+def convertMulAddConst(module, fullname, graph, inp, paramHolder):
 	c = inp.shape[0]
 
 	shift = np.array([module.b] * c, dtype=np.float32)
 	scale = np.array([module.a] * c, dtype=np.float32)
 	power = np.ones((c, ), dtype=np.float32)
 
-	holder.extend([shift, scale, power])
+	paramHolder.extend([shift, scale, power])
 
 	output = graph.addScale(inp, numpyPtr(shift), numpyPtr(scale), numpyPtr(power), c, fullname)
 	return [output]
 
 
-def convertBatchNorm(module, fullname, graph, inp, holder):
+def convertBatchNorm(module, fullname, graph, inp, paramHolder):
 	shape = tuple(inp.shape)
 	assert len(shape) == 1
 
 	output = graph.addReshape(inp, shape + (1, 1), "%s_inshape" % fullname)
-	[output] = convertBatchNorm2D(module, fullname, graph, output, holder)
+	[output] = convertBatchNorm2D(module, fullname, graph, output, paramHolder)
 
 	output = graph.addReshape(output, shape, "%s_outshape" % fullname)
 	return [output]
@@ -513,7 +524,7 @@ def convertSum(module, fullname, graph, inp):
 	return [output]
 
 
-def convertRNN(module, fullname, graph, inp, holder):
+def convertRNN(module, fullname, graph, inp, paramHolder):
 	assert module.getSequences
 	seqlen = inp.shape[0]
 
@@ -534,7 +545,7 @@ def convertRNN(module, fullname, graph, inp, holder):
 	params = [
 		{name: param.get() for name, param in module.params[key].items()} for key in sorted(module.params.keys())
 	]
-	holder.append(params)
+	paramHolder.append(params)
 
 	keys = {
 		"relu": ["wi", "ri"],
@@ -563,11 +574,11 @@ def convertUpsample2D(module, fullname, graph, inp):
 	return [output]
 
 
-def convertPRelu(module, fullname, graph, inp, holder):
+def convertPRelu(module, fullname, graph, inp, paramHolder):
 	assert not module.sharedMaps
 
 	slopes = module.slopes.get()
-	holder.append(slopes)
+	paramHolder.append(slopes)
 
 	output = graph.addPRelu(inp, numpyPtr(slopes), slopes.size, fullname)
 	return [output]

@@ -1,6 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend.Benchmarks import timeKernel
+from PuzzleLib.Backend.gpuarray import timeKernel
 
 
 def scoreModels(net, engine, data, labels):
@@ -23,13 +23,11 @@ def printResults(probs, labels, name):
 		print("#%s %s (prob=%s)" % (i, labels[idx[i]], probs[idx[i]]))
 
 
-def benchModels(net, engine, data, lognames=None):
-	netlabel, enginelabel = ("Net   ", "Engine") if lognames is None else lognames
-
+def benchModels(net, engine, data):
 	net.optimizeForShape(data.shape)
 
 	nettime = timeKernel(net, args=(data, ), looplength=100, log=False, normalize=True)
 	enginetime = timeKernel(engine, args=(data, ), looplength=100, log=False, normalize=True)
 
-	print("%s time: device=%.10f host=%.10f" % (netlabel, nettime[0], nettime[1]))
-	print("%s time: device=%.10f host=%.10f" % (enginelabel, enginetime[0], enginetime[1]))
+	print("Net    time: device=%.10f host=%.10f" % (nettime[0], nettime[1]))
+	print("Engine time: device=%.10f host=%.10f" % (enginetime[0], enginetime[1]))

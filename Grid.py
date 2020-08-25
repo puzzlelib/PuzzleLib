@@ -64,7 +64,7 @@ class NodeInfo:
 
 
 	def recvBuffer(self, name, queue, buffer=None):
-		from PuzzleLib.Backend.Utils import backend
+		from PuzzleLib.Backend.gpuarray import backend
 
 		parentname, bufipc, bufsize, args = queue.get()
 		assert name == parentname
@@ -87,7 +87,7 @@ class NodeInfo:
 
 
 	def sendBuffer(self, name, buffer, queue, *args):
-		from PuzzleLib.Backend.Utils import backend
+		from PuzzleLib.Backend.gpuarray import backend
 
 		if name not in self.outTensors:
 			self.outTensors[name] = buffer
@@ -121,8 +121,7 @@ class ParentNode(NodeInfo):
 
 
 	def sumTensor(self, name, tensor):
-		from PuzzleLib.Backend.Blas import addVectorToVector
-		from PuzzleLib.Backend.gpuarray import GPUArray
+		from PuzzleLib.Backend import gpuarray, Blas
 
 		beta = 1.0 / self.gridsize
 
@@ -130,8 +129,8 @@ class ParentNode(NodeInfo):
 			buffer, (shape, dtype) = self.recvBuffer(name, ctopQueue)
 			assert shape == tensor.shape and dtype == tensor.dtype
 
-			childTensor = GPUArray(shape, dtype, gpudata=buffer)
-			addVectorToVector(tensor, childTensor, out=tensor, alpha=beta if index == 0 else 1.0, beta=beta)
+			childTensor = gpuarray.empty(shape, dtype, gpudata=buffer)
+			Blas.addVectorToVector(tensor, childTensor, out=tensor, alpha=beta if index == 0 else 1.0, beta=beta)
 
 		self.broadcastBuffer(name, tensor.gpudata)
 

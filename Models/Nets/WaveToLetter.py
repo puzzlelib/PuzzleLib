@@ -1,8 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
-
 from PuzzleLib.Containers.Sequential import Sequential
 
 from PuzzleLib.Modules.Conv1D import Conv1D
@@ -86,7 +84,7 @@ def unittest():
 	w2l(data)
 
 	del w2l
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

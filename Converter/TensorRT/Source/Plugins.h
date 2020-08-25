@@ -1,7 +1,12 @@
 #pragma once
 
+#include <cassert>
+#include <cstring>
+
 #include <string>
 #include <vector>
+
+#include <cuda_runtime.h>
 
 #ifdef __GNUC__
 	#pragma GCC diagnostic push
@@ -19,63 +24,108 @@ namespace nv = nvinfer1;
 #endif
 
 
-struct Plugin : nv::IPluginExt
+struct PuzzlePlugin : nv::IPluginV2IOExt
 {
-	nv::Dims m_inshape;
-	nv::Dims m_outshape;
+	std::string m_ns;
+	nv::Dims m_inshape, m_outshape;
 	nv::DataType m_datatype;
 
 
-	Plugin();
-	Plugin(const void *serialData, size_t /*serialLength*/);
+	PuzzlePlugin();
+	PuzzlePlugin(const void *serialData, size_t serialLength);
 
-	size_t getSerializationSize() override;
-	void serialize(void *serialData) override;
+	size_t getSerializationSize() const override;
+	void serialize(void *serialData) const override;
+
+	void setPluginNamespace(const char *pluginNamespace) override;
+	const char *getPluginNamespace() const override;
+
 
 	template<typename T>
-	void write(char *& buffer, const T& val)
+	static void writeValue(char *&buffer, const T &val)
 	{
 		*reinterpret_cast<T *>(buffer) = val;
 		buffer += sizeof(T);
 	}
 
 	template<typename T>
-	void read(const char *& buffer, T& val)
+	static void writeVector(char *&buffer, const std::vector<T> &vector)
+	{
+		size_t size = vector.size();
+		writeValue(buffer, size);
+
+		size_t nbytes = size * sizeof(T);
+		std::memcpy(buffer, &vector[0], nbytes);
+
+		buffer += nbytes;
+	}
+
+	template<typename T>
+	static void readValue(const char *&buffer, T &val)
 	{
 		val = *reinterpret_cast<const T *>(buffer);
 		buffer += sizeof(T);
 	}
+
+	template<typename T>
+	static void readVector(const char *&buffer, std::vector<T> &vector)
+	{
+		size_t size;
+		readValue(buffer, size);
+
+		vector.resize(size);
+		size_t nbytes = size * sizeof(T);
+
+		std::memcpy(&vector[0], buffer, nbytes);
+		buffer += nbytes;
+	}
+
+	template<typename T>
+	static size_t vectorNBytes(const std::vector<T> &vector)
+	{
+		return sizeof(vector.size()) + vector.size() * sizeof(T);
+	}
 };
 
 
-struct IPluginFactory : nv::IPluginFactory
+struct PuzzlePluginCreator : nv::IPluginCreator
 {
-	std::vector<Plugin *> m_plugins;
+	std::string m_ns;
 
 
-	virtual ~IPluginFactory();
+	const char *getPluginVersion() const override;
+	void setPluginNamespace(const char *pluginNamespace) override;
+	const char *getPluginNamespace() const override;
 
-	nv::IPluginExt *createPRelu(const float *data, size_t length);
-	nv::IPluginExt *createPRelu(const void *serialData, size_t serialLength);
 
-	nv::IPluginExt *createReflectPad1D(int lpad, int rpad);
-	nv::IPluginExt *createReflectPad1D(const void *serialData, size_t serialLength);
+	static const char *version, *reflectPad1DName, *instNorm2DName;
 };
 
 
-struct PluginFactory : IPluginFactory
+template<typename T>
+struct CudaBuffer
 {
-	static const std::string prelu;
-	static const std::string reflectpad;
+	T *m_data;
+	size_t m_length;
 
 
-	nv::IPlugin *createPlugin(const char *layerName, const void *serialData, size_t serialLength) override;
-};
+	CudaBuffer(size_t length)
+	{
+		m_length = length;
 
+		cudaError_t status = cudaMalloc(&m_data, length * sizeof(T));
+		assert(status == cudaSuccess);
+	}
 
-struct CaffePluginFactory : IPluginFactory, nvcaffeparser1::IPluginFactory
-{
-	bool isPlugin(const char *layerName) override;
-	nvinfer1::IPlugin *createPlugin(const char *layerName, const nvinfer1::Weights *weights, int nbWeights) override;
-	nv::IPlugin *createPlugin(const char *layerName, const void *serialData, size_t serialLength) override;
+	~CudaBuffer()
+	{
+		if (m_data != nullptr)
+			cudaFree(m_data);
+	}
+
+	cudaError_t set(const std::vector<T> &data, size_t offset = 0)
+	{
+		assert(m_length >= offset + data.size());
+		return cudaMemcpy(m_data + offset, &data[0], data.size() * sizeof(T), cudaMemcpyHostToDevice);
+	}
 };

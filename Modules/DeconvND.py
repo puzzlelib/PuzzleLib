@@ -3,21 +3,25 @@ import sys
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.Basic import ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
-from PuzzleLib.Backend.Dnn.Basic import convNdbenchmark, deconvNd, deconvNdBackwardData, deconvNdBackwardParams
+from PuzzleLib.Backend.Dnn import ConvFwdAlgo, ConvBwdDataAlgo, ConvBwdFilterAlgo
+from PuzzleLib.Backend.Dnn import convNdbenchmark, deconvNd, deconvNdBackwardData, deconvNdBackwardParams
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
 class DeconvND(Module):
-	def __init__(self, nd, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True, name=None,
-				 initscheme=None, empty=False, groups=1):
+	def __init__(self, nd, inmaps, outmaps, size, stride=1, pad=0, dilation=1, postpad=0, wscale=1.0, useBias=True,
+				 name=None, initscheme=None, empty=False, groups=1):
 		super().__init__(name)
 
 		self.stride = self.repeat(stride, nd)
 		self.pad = self.repeat(pad, nd)
 		self.dilation = self.repeat(dilation, nd)
+		self.postpad = self.repeat(postpad, nd)
+
+		if any(p >= max(s, d) for p, s, d in zip(self.postpad, self.stride, self.dilation)):
+			raise ModuleError("Postpad must be smaller than stride and dilation")
 
 		self.useBias = useBias
 		self.groups = groups
@@ -78,7 +82,7 @@ class DeconvND(Module):
 
 	def updateData(self, data):
 		self.data = deconvNd(
-			data, self.W, self.b, stride=self.stride, pad=self.pad, dilation=self.dilation,
+			data, self.W, self.b, stride=self.stride, pad=self.pad, dilation=self.dilation, postpad=self.postpad,
 			groups=self.groups, algo=self.bwdDataAlgo
 		)
 

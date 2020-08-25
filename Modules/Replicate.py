@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray, Blas
-from PuzzleLib.Backend.Utils import dtypesSupported, memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 
@@ -38,7 +38,7 @@ class Replicate(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -47,7 +47,7 @@ class Replicate(Module):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		replicateTest(dtype)
 
 

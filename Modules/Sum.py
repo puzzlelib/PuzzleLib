@@ -1,8 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend import BlasGroup
-
+from PuzzleLib.Backend import gpuarray, Blas
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
@@ -27,9 +25,9 @@ class Sum(Module):
 		indata = data.reshape(preAxis, self.axisSize, postAxis)
 
 		if self.useWeights:
-			self.data = BlasGroup.mulTensorOnVecGroup(indata, self.v, formatT="gbp", transpT=True)
+			self.data = Blas.mulTensorOnVecGroup(indata, self.v, formatT="gbp", transpT=True)
 		else:
-			self.data = BlasGroup.sumOnTensorGroup(indata, formatT="gbp", cols=True)
+			self.data = Blas.sumOnTensorGroup(indata, formatT="gbp", cols=True)
 
 		self.data = self.data.reshape(*data.shape[:self.axis], *data.shape[self.axis + 1:])
 
@@ -43,12 +41,12 @@ class Sum(Module):
 		if self.useWeights:
 			v = self.v.reshape(preAxis, self.axisSize, 1)
 
-			datagrad = BlasGroup.mulTensorBatch(v, outgrad, formatA="gbp", formatB="gbp", formatOut="gbp")
-			wgrad = BlasGroup.mulTensorOnVecGroup(self.inData[0], grad, formatT="gbp")
+			datagrad = Blas.mulTensorBatch(v, outgrad, formatA="gbp", formatB="gbp", formatOut="gbp")
+			wgrad = Blas.mulTensorOnVecGroup(self.inData[0], grad, formatT="gbp")
 
 		else:
 			ones = gpuarray.empty(shape=(1, self.axisSize, 1), dtype=np.float32).fill(1.0)
-			datagrad = BlasGroup.mulTensorBatch(ones, outgrad, formatA="gbp", formatB="gbp", formatOut="gbp")
+			datagrad = Blas.mulTensorBatch(ones, outgrad, formatA="gbp", formatB="gbp", formatOut="gbp")
 
 		datagrad = datagrad.reshape(*grad.shape[:self.axis], self.axisSize, *grad.shape[self.axis:])
 		self.grad = [datagrad, wgrad] if self.useWeights else datagrad

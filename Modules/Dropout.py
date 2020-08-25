@@ -3,7 +3,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported, globalRng, copy, memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import globalRng, copy, memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import dropoutKer
 
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -24,10 +24,10 @@ class Dropout(Module):
 		self.rands = None
 
 		self.slice = slicing
-
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 
 	def updateData(self, data):
@@ -92,7 +92,7 @@ class Dropout(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -101,7 +101,7 @@ class Dropout(Module):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		dropoutTest(dtype)
 
 

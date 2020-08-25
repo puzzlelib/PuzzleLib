@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.SpatialTf import spatialTf, spatialTfBackward
+from PuzzleLib.Backend.Dnn import spatialTf, spatialTfBackward
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 

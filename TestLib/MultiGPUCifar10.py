@@ -1,29 +1,6 @@
+import numpy as np
+
 from PuzzleLib.Grid import runGrid
-
-
-def buildNet():
-	from PuzzleLib.Containers import Sequential
-	from PuzzleLib.Modules import Conv2D, MaxPool2D, Activation, relu, Flatten, Linear
-
-	seq = Sequential()
-	seq.append(Conv2D(3, 32, 5, pad=2, wscale=0.0001, initscheme="gaussian"))
-	seq.append(MaxPool2D(3, 2))
-	seq.append(Activation(relu))
-
-	seq.append(Conv2D(32, 32, 5, pad=2, wscale=0.01, initscheme="gaussian"))
-	seq.append(MaxPool2D(3, 2))
-	seq.append(Activation(relu))
-
-	seq.append(Conv2D(32, 64, 5, pad=2, wscale=0.01, initscheme="gaussian"))
-	seq.append(MaxPool2D(3, 2))
-	seq.append(Activation(relu))
-
-	seq.append(Flatten())
-	seq.append(Linear(seq.dataShapeFrom((1, 3, 32, 32))[1], 64, wscale=0.1, initscheme="gaussian"))
-	seq.append(Activation(relu))
-
-	seq.append(Linear(64, 10, wscale=0.1, initscheme="gaussian"))
-	return seq
 
 
 def train(nodeinfo, verbose):
@@ -34,21 +11,21 @@ def train(nodeinfo, verbose):
 	data, labels = data[:], labels[:]
 	print("[%s]: Loaded cifar10" % nodeinfo.index)
 
-	import numpy as np
 	np.random.seed(1234)
 
-	seq = buildNet()
+	from PuzzleLib.TestLib.CnnCifar10Simple import buildNet
+	net = buildNet()
 
 	from PuzzleLib.Optimizers import MomentumSGD
 	optimizer = MomentumSGD(learnRate=0.01, momRate=0.9, nodeinfo=nodeinfo)
-	optimizer.setupOn(seq, useGlobalState=True)
+	optimizer.setupOn(net, useGlobalState=True)
 
 	from PuzzleLib.Cost import CrossEntropy
 	cost = CrossEntropy(maxlabels=10)
 
 	from PuzzleLib.Handlers import Trainer, Validator
-	trainer = Trainer(seq, cost, optimizer, batchsize=128 // nodeinfo.gridsize)
-	validator = Validator(seq, cost)
+	trainer = Trainer(net, cost, optimizer, batchsize=128 // nodeinfo.gridsize)
+	validator = Validator(net, cost)
 
 	import math
 	currerror = math.inf

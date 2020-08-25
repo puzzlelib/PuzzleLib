@@ -7,7 +7,7 @@ enum
 };
 
 
-inline static int Cuda_fromDataType(Cuda_DataType dtype)
+inline static int Cuda_dtypeToNumpy(Cuda_DataType dtype)
 {
 	switch (dtype)
 	{
@@ -24,12 +24,6 @@ inline static int Cuda_fromDataType(Cuda_DataType dtype)
 		case DTYPE_UINT16:  return NPY_UINT16;
 		default:            assert(false); return -1;
 	}
-}
-
-
-inline static size_t Cuda_GPUArray_nbytes(const Cuda_GPUArray *self)
-{
-	return self->size * Cuda_dtypeSize(self->dtype);
 }
 
 
@@ -52,43 +46,41 @@ inline static bool Cuda_GPUArray_isValidDim(size_t ndim)
 }
 
 
-inline static void Cuda_copyShape(size_t *outshape, size_t *outstrides, const size_t *inshape, const size_t *instrides,
-								  size_t ndim)
+inline static void Cuda_copyArray(size_t *outary, const size_t *inary, size_t size)
 {
-	for (size_t i = 0; i < ndim; i += 1)
+	for (size_t i = 0; i < size; i += 1)
+		outary[i] = inary[i];
+}
+
+
+static void Cuda_ArraySpec_initFromGPUArray(Cuda_ArraySpec *self, const Cuda_GPUArray *ary)
+{
+	assert(ary->ndim <= GPUARRAY_NDIM_LIMIT);
+	const size_t *shape = CUDA_GPUARRAY_SHAPE(ary);
+
+	if (ary->contiguous)
 	{
-		outshape[i] = inshape[i];
-		outstrides[i] = instrides[i];
+		Cuda_copyArray(self->shape, shape, ary->ndim);
+		Cuda_copyArray(self->strides, CUDA_GPUARRAY_STRIDES(ary), ary->ndim);
 	}
-}
-
-
-static void Cuda_GPUArray_toSpecAsContiguous(const Cuda_GPUArray *self, Cuda_ArraySpec *spec)
-{
-	assert(self->ndim <= GPUARRAY_NDIM_LIMIT);
-
-	if (self->contiguous)
-		Cuda_copyShape(spec->shape, spec->strides, CUDA_GPUARRAY_SHAPE(self), CUDA_GPUARRAY_STRIDES(self), self->ndim);
 	else
-		Cuda_fillShapeAsContiguous(
-			spec->shape, spec->strides, CUDA_GPUARRAY_SHAPE(self), self->ndim, Cuda_dtypeSize(self->dtype)
-		);
+		Cuda_copyShapeAsContiguous(self->shape, self->strides, shape, ary->ndim, Cuda_dtypeSize(ary->dtype));
 
-	spec->ndim = self->ndim;
-	spec->size = self->size;
+	self->ndim = ary->ndim;
+	self->size = ary->size;
 
-	spec->dtype = self->dtype;
-	spec->contiguous = true;
+	self->dtype = ary->dtype;
+	self->contiguous = true;
 }
 
 
-inline static bool Cuda_numpyToSpecAsContiguous(PyArrayObject *ary, Cuda_ArraySpec *spec)
+inline static bool Cuda_ArraySpec_initFromNumpy(Cuda_ArraySpec *self, PyArrayObject *ary)
 {
 	size_t ndim = PyArray_NDIM(ary);
 	if (!Cuda_GPUArray_isValidDim(ndim))
 		return false;
 
-	Cuda_DataType dtype = Cuda_toDataType(PyArray_DTYPE(ary)->type_num);
+	Cuda_DataType dtype = Cuda_numpyToDataType(PyArray_DTYPE(ary)->type_num);
 	if (dtype == DTYPE_INVALID)
 		return false;
 
@@ -97,31 +89,28 @@ inline static bool Cuda_numpyToSpecAsContiguous(PyArrayObject *ary, Cuda_ArraySp
 
 	for (ptrdiff_t i = (ptrdiff_t)ndim - 1; i >= 0; i -= 1)
 	{
-		spec->shape[i] = npshape[i];
-		spec->strides[i] = lastdim * laststride;
+		self->shape[i] = npshape[i];
+		self->strides[i] = lastdim * laststride;
 
-		lastdim = npshape[i], laststride = spec->strides[i];
+		lastdim = npshape[i], laststride = self->strides[i];
 	}
 
-	spec->ndim = ndim;
-	spec->size = PyArray_SIZE(ary);
+	self->ndim = ndim;
+	self->size = PyArray_SIZE(ary);
 
-	spec->dtype = dtype;
-	spec->contiguous = true;
+	self->dtype = dtype;
+	self->contiguous = true;
 
 	return true;
 }
 
 
-static bool Cuda_pyToSpec(PyTupleObject *pyshape, Cuda_DataType dtype, bool contiguous, size_t currsize,
-						  Cuda_ArraySpec *spec)
+static bool Cuda_ArraySpec_initFromTuple(Cuda_ArraySpec *self, PyTupleObject *pyshape, Cuda_DataType dtype,
+										 bool contiguous, size_t currsize)
 {
 	size_t ndim = PyTuple_GET_SIZE(pyshape);
 	if (!Cuda_GPUArray_isValidDim(ndim))
 		return false;
-
-	spec->dtype = dtype;
-	spec->contiguous = contiguous;
 
 	size_t size = 1;
 	size_t lastdim = 1, laststride = Cuda_dtypeSize(dtype);
@@ -148,11 +137,11 @@ static bool Cuda_pyToSpec(PyTupleObject *pyshape, Cuda_DataType dtype, bool cont
 			break;
 		}
 
-		spec->shape[i] = dim;
-		spec->strides[i] = lastdim * laststride;
+		self->shape[i] = dim;
+		self->strides[i] = lastdim * laststride;
 		size *= dim;
 
-		lastdim = dim, laststride = spec->strides[i];
+		lastdim = dim, laststride = self->strides[i];
 	}
 
 	if (undefidx >= 0)
@@ -175,7 +164,7 @@ static bool Cuda_pyToSpec(PyTupleObject *pyshape, Cuda_DataType dtype, bool cont
 				return false;
 			}
 
-			spec->shape[i] = dim;
+			self->shape[i] = dim;
 			size *= dim;
 		}
 
@@ -185,22 +174,25 @@ static bool Cuda_pyToSpec(PyTupleObject *pyshape, Cuda_DataType dtype, bool cont
 			return false;
 		}
 
-		spec->shape[undefidx] = currsize / size;
-		spec->strides[undefidx] = lastdim * laststride;
+		self->shape[undefidx] = currsize / size;
+		self->strides[undefidx] = lastdim * laststride;
 		size = currsize;
 
 		for (ptrdiff_t i = undefidx - 1; i >= 0; i -= 1)
-			spec->strides[i] = spec->strides[i + 1] * spec->shape[i + 1];
+			self->strides[i] = self->strides[i + 1] * self->shape[i + 1];
 	}
 
-	spec->ndim = ndim;
-	spec->size = size;
+	self->ndim = ndim;
+	self->size = size;
+
+	self->dtype = dtype;
+	self->contiguous = contiguous;
 
 	return true;
 }
 
 
-static Cuda_Buffer *Cuda_GPUArray_acquireData(Cuda_MemoryPool *allocator, Cuda_Buffer *gpudata, size_t size)
+static Cuda_Buffer *Cuda_acquireGPUData(Cuda_MemoryPool *allocator, Cuda_Buffer *gpudata, size_t size)
 {
 	if (gpudata != NULL)
 	{
@@ -254,7 +246,8 @@ static void Cuda_GPUArray_init(Cuda_GPUArray *self, Cuda_Buffer *gpudata, const 
 	self->dtype = spec->dtype;
 	self->contiguous = spec->contiguous;
 
-	Cuda_copyShape(CUDA_GPUARRAY_SHAPE(self), CUDA_GPUARRAY_STRIDES(self), spec->shape, spec->strides, spec->ndim);
+	Cuda_copyArray(CUDA_GPUARRAY_SHAPE(self), spec->shape, spec->ndim);
+	Cuda_copyArray(CUDA_GPUARRAY_STRIDES(self), spec->strides, spec->ndim);
 
 #if defined(TRACE_CUDA_DRIVER)
 	fprintf(
@@ -280,7 +273,7 @@ static Cuda_GPUArray *Cuda_GPUArray_new(Cuda_Buffer *gpudata, const Cuda_ArraySp
 Cuda_GPUArray *Cuda_GPUArray_newWithAllocator(Cuda_MemoryPool *allocator, Cuda_Buffer *gpudata,
 											  const Cuda_ArraySpec *spec)
 {
-	gpudata = Cuda_GPUArray_acquireData(allocator, gpudata, spec->size * Cuda_dtypeSize(spec->dtype));
+	gpudata = Cuda_acquireGPUData(allocator, gpudata, spec->size * Cuda_dtypeSize(spec->dtype));
 	if (gpudata == NULL)
 		goto error_1;
 
@@ -323,12 +316,12 @@ static PyObject *Cuda_GPUArray_pyNew(PyTypeObject *type, PyObject *args, PyObjec
 
 	Cuda_MemoryPool *allocator; allocator = (Cuda_MemoryPool *)pyalloc;
 
-	Cuda_DataType dtype; dtype = Cuda_toDataType(pytype->type_num);
+	Cuda_DataType dtype; dtype = Cuda_numpyToDataType(pytype->type_num);
 	if (dtype == DTYPE_INVALID)
 		goto error_2;
 
 	Cuda_ArraySpec spec;
-	if (!Cuda_pyToSpec(pyshape, dtype, true, 0, &spec))
+	if (!Cuda_ArraySpec_initFromTuple(&spec, pyshape, dtype, true, 0))
 		goto error_2;
 
 	Cuda_GPUArray *self; self = Cuda_GPUArray_newWithAllocator(allocator, gpudata, &spec);
@@ -371,7 +364,7 @@ typedef enum Cuda_ReshapeState
 Cuda_ReshapeState;
 
 
-static bool Cuda_GPUArray_reshapeDiscontig(const Cuda_GPUArray *self, Cuda_ArraySpec *spec)
+static bool Cuda_GPUArray_discontiguousReshape(const Cuda_GPUArray *self, Cuda_ArraySpec *spec)
 {
 	size_t lhsdim = 1, rhsdim = 1;
 	ptrdiff_t lhs = self->ndim - 1, rhs = spec->ndim - 1;
@@ -438,7 +431,7 @@ static PyObject *Cuda_GPUArray_reshape(PyObject *self, PyObject *args)
 	PyTupleObject *pyshape = (PyTupleObject *)(PyTuple_CheckExact(arg) ? arg : args);
 
 	Cuda_ArraySpec spec;
-	if (!Cuda_pyToSpec(pyshape, pyary->dtype, pyary->contiguous, pyary->size, &spec))
+	if (!Cuda_ArraySpec_initFromTuple(&spec, pyshape, pyary->dtype, pyary->contiguous, pyary->size))
 		return NULL;
 
 	if (spec.size != pyary->size)
@@ -447,7 +440,7 @@ static PyObject *Cuda_GPUArray_reshape(PyObject *self, PyObject *args)
 		return NULL;
 	}
 
-	if (!pyary->contiguous && !Cuda_GPUArray_reshapeDiscontig(pyary, &spec))
+	if (!pyary->contiguous && !Cuda_GPUArray_discontiguousReshape(pyary, &spec))
 		return NULL;
 
 	Cuda_GPUArray *reshaped = Cuda_GPUArray_new(pyary->gpudata, &spec);
@@ -464,14 +457,17 @@ static void Cuda_GPUArray_reinterpretShape(const Cuda_GPUArray *self, Cuda_DataT
 	size_t itemsize = Cuda_dtypeSize(dtype);
 
 	spec->ndim = self->ndim;
-	spec->size = Cuda_GPUArray_nbytes(self) / itemsize;
+	spec->size = CUDA_GPUARRAY_NBYTES(self) / itemsize;
 
 	spec->dtype = dtype;
 	spec->contiguous = self->contiguous;
 
-	Cuda_copyShape(spec->shape, spec->strides, CUDA_GPUARRAY_SHAPE(self), CUDA_GPUARRAY_STRIDES(self), self->ndim - 1);
+	const size_t *shape = CUDA_GPUARRAY_SHAPE(self), *strides = CUDA_GPUARRAY_STRIDES(self);
 
-	spec->shape[self->ndim - 1] = CUDA_GPUARRAY_SHAPE(self)[self->ndim - 1] * Cuda_dtypeSize(self->dtype) / itemsize;
+	Cuda_copyArray(spec->shape, shape, self->ndim - 1);
+	Cuda_copyArray(spec->strides, strides, self->ndim - 1);
+
+	spec->shape[self->ndim - 1] = shape[self->ndim - 1] * Cuda_dtypeSize(self->dtype) / itemsize;
 	spec->strides[self->ndim - 1] = itemsize;
 }
 
@@ -498,7 +494,7 @@ static PyObject *Cuda_GPUArray_view(PyObject *self, PyObject *args, PyObject *kw
 	if (pytype == NULL)
 		goto error_1;
 
-	Cuda_DataType dtype; dtype = Cuda_toDataType(pytype->type_num);
+	Cuda_DataType dtype; dtype = Cuda_numpyToDataType(pytype->type_num);
 	if (dtype == DTYPE_INVALID)
 		goto error_2;
 
@@ -567,12 +563,12 @@ typedef struct Cuda_MergedArraySpec
 	size_t ndim;
 
 	void *ptr;
-	bool isDevice;
+	bool onDevice;
 }
 Cuda_MergedArraySpec;
 
 
-static bool Cuda_mergeAxesForNumpy(PyArrayObject *ary, Cuda_MergedArraySpec *spec)
+static bool Cuda_MergedArraySpec_initFromNumpy(Cuda_MergedArraySpec *self, PyArrayObject *ary)
 {
 	size_t ndim = 0, dim = 1;
 
@@ -583,14 +579,23 @@ static bool Cuda_mergeAxesForNumpy(PyArrayObject *ary, Cuda_MergedArraySpec *spe
 	{
 		dim *= shape[i];
 
+		if (strides[i] < 0)
+			goto negative_stride_error;
+
 		if (strides[i] != shape[i + 1] * strides[i + 1])
 		{
-			spec->shape[ndim] = dim;
-			spec->strides[ndim] = strides[i];
+			self->shape[ndim] = dim;
+			self->strides[ndim] = strides[i];
 
 			ndim += 1;
 			if (ndim > GPUARRAY_DISCONTIG_NDIM_LIMIT)
-				goto error;
+			{
+				PyErr_Format(
+					PyExc_ValueError, "%s has %" PRIuMAX " discontiguous axes (limit is %d)",
+					Py_TYPE(ary)->tp_name, ndim, GPUARRAY_DISCONTIG_NDIM_LIMIT
+				);
+				return false;
+			}
 
 			dim = 1;
 		}
@@ -598,208 +603,223 @@ static bool Cuda_mergeAxesForNumpy(PyArrayObject *ary, Cuda_MergedArraySpec *spe
 
 	if (npNDim > 0)
 	{
-		spec->shape[ndim] = dim * shape[npNDim - 1];
-		spec->strides[ndim] = strides[npNDim - 1];
+		if (strides[npNDim - 1] < 0)
+			goto negative_stride_error;
+
+		self->shape[ndim] = dim * shape[npNDim - 1];
+		self->strides[ndim] = strides[npNDim - 1];
 	}
 	else
 	{
-		spec->shape[ndim] = dim;
-		spec->strides[ndim] = PyArray_DTYPE(ary)->elsize;
+		self->shape[ndim] = dim;
+		self->strides[ndim] = PyArray_DTYPE(ary)->elsize;
 	}
 
-	spec->ndim = ndim + 1;
+	self->ndim = ndim + 1;
 
-	spec->isDevice = false;
-	spec->ptr = PyArray_DATA(ary);
+	self->onDevice = false;
+	self->ptr = PyArray_DATA(ary);
 
 	return true;
 
-error:
-	PyErr_Format(
-		PyExc_ValueError, "%s has %" PRIuMAX " discontiguous axes (limit is %d)",
-		Py_TYPE(ary)->tp_name, ndim, GPUARRAY_DISCONTIG_NDIM_LIMIT
-	);
+negative_stride_error:
+	PyErr_Format(PyExc_ValueError, "%s has negative stride", Py_TYPE(ary)->tp_name);
 	return false;
 }
 
 
-static bool Cuda_GPUArray_mergeAxes(const Cuda_GPUArray *self, Cuda_MergedArraySpec *spec)
+static bool Cuda_MergedArraySpec_initFromGPUArray(Cuda_MergedArraySpec *self, const Cuda_GPUArray *ary)
 {
 	size_t ndim = 0, dim = 1;
-	const size_t *shape = CUDA_GPUARRAY_SHAPE(self), *strides = CUDA_GPUARRAY_STRIDES(self);
+	const size_t *shape = CUDA_GPUARRAY_SHAPE(ary), *strides = CUDA_GPUARRAY_STRIDES(ary);
 
-	for (size_t i = 0; i < self->ndim - 1; i += 1)
+	for (size_t i = 0; i < ary->ndim - 1; i += 1)
 	{
 		dim *= shape[i];
 
 		if (strides[i] != shape[i + 1] * strides[i + 1])
 		{
-			spec->shape[ndim] = dim;
-			spec->strides[ndim] = strides[i];
+			self->shape[ndim] = dim;
+			self->strides[ndim] = strides[i];
 
 			ndim += 1;
 			if (ndim > GPUARRAY_DISCONTIG_NDIM_LIMIT)
-				goto error;
+			{
+				PyErr_Format(
+					PyExc_ValueError, "gpuarray has %" PRIuMAX " discontiguous axes (limit is %d)",
+					ndim, GPUARRAY_DISCONTIG_NDIM_LIMIT
+				);
+				return false;
+			}
 
 			dim = 1;
 		}
 	}
 
-	if (self->ndim > 0)
+	if (ary->ndim > 0)
 	{
-		spec->shape[ndim] = dim * shape[self->ndim - 1];
-		spec->strides[ndim] = strides[self->ndim - 1];
+		self->shape[ndim] = dim * shape[ary->ndim - 1];
+		self->strides[ndim] = strides[ary->ndim - 1];
 	}
 	else
 	{
-		spec->shape[ndim] = dim;
-		spec->strides[ndim] = Cuda_dtypeSize(self->dtype);
+		self->shape[ndim] = dim;
+		self->strides[ndim] = Cuda_dtypeSize(ary->dtype);
 	}
 
-	spec->ndim = ndim + 1;
+	self->ndim = ndim + 1;
 
-	spec->isDevice = true;
-	spec->ptr = self->gpudata->ptr;
+	self->onDevice = true;
+	self->ptr = ary->gpudata->ptr;
 
 	return true;
-
-error:
-	PyErr_Format(
-		PyExc_ValueError, "gpuarray has %" PRIuMAX " discontiguous axes (limit is %d)",
-		ndim, GPUARRAY_DISCONTIG_NDIM_LIMIT
-	);
-	return false;
 }
 
 
-static bool Cuda_GPUArray_pyMergeAxes(PyObject *ary, Cuda_MergedArraySpec *spec)
+static bool Cuda_MergedArraySpec_initFromArray(Cuda_MergedArraySpec *self, PyObject *ary)
 {
 	assert(Py_TYPE(ary) == Cuda_GPUArray_Type || PyArray_CheckExact(ary));
 
 	if (Py_TYPE(ary) == Cuda_GPUArray_Type)
-		return Cuda_GPUArray_mergeAxes((Cuda_GPUArray *)ary, spec);
+		return Cuda_MergedArraySpec_initFromGPUArray(self, (Cuda_GPUArray *)ary);
 	else
-		return Cuda_mergeAxesForNumpy((PyArrayObject *)ary, spec);
+		return Cuda_MergedArraySpec_initFromNumpy(self, (PyArrayObject *)ary);
 }
 
 
-static void Cuda_GPUArray_promoteMergedArraySpec(Cuda_MergedArraySpec *spec, Cuda_MergedArraySpec *base)
+static void Cuda_MergedArraySpec_promote(Cuda_MergedArraySpec *self, Cuda_MergedArraySpec *base)
 {
-	assert(spec->ndim < base->ndim);
+	assert(self->ndim < base->ndim);
 
-	if (spec->ndim == 1)
-		Cuda_fillShapeAsContiguous(spec->shape, spec->strides, base->shape, base->ndim, base->strides[base->ndim - 1]);
+	if (self->ndim == 1)
+		Cuda_copyShapeAsContiguous(self->shape, self->strides, base->shape, base->ndim, base->strides[base->ndim - 1]);
 
 	else
 	{
-		assert(spec->ndim == GPUARRAY_DISCONTIG_NDIM_LIMIT && base->ndim == GPUARRAY_DISCONTIG_NDIM_LIMIT + 1);
+		assert(self->ndim == GPUARRAY_DISCONTIG_NDIM_LIMIT && base->ndim == GPUARRAY_DISCONTIG_NDIM_LIMIT + 1);
 
-		size_t stride = spec->strides[0];
-		ptrdiff_t stridedim = (spec->shape[0] == base->shape[0]) ? 0 : 1;
+		size_t stride = self->strides[0];
+		ptrdiff_t stridedim = (self->shape[0] == base->shape[0]) ? 0 : 1;
 
 		size_t lastdim = 1, laststride = base->strides[GPUARRAY_DISCONTIG_NDIM_LIMIT];
 
 		for (ptrdiff_t i = GPUARRAY_DISCONTIG_NDIM_LIMIT; i >= 0; i -= 1)
 		{
-			spec->shape[i] = base->shape[i];
-			spec->strides[i] = (i == stridedim) ? stride : lastdim * laststride;
+			self->shape[i] = base->shape[i];
+			self->strides[i] = (i == stridedim) ? stride : lastdim * laststride;
 
-			lastdim = spec->shape[i], laststride = spec->strides[i];
+			lastdim = self->shape[i], laststride = self->strides[i];
 		}
 	}
 
-	spec->ndim = base->ndim;
+	self->ndim = base->ndim;
 }
 
 
-static bool Cuda_GPUArray_memcpyDiscontig(PyObject *pysrc, PyObject *pydst)
+inline static enum cudaMemcpyKind Cuda_memcpyKind(Cuda_MergedArraySpec *src, Cuda_MergedArraySpec *dst)
 {
-	Cuda_MergedArraySpec srcSpec;
-	if (!Cuda_GPUArray_pyMergeAxes(pysrc, &srcSpec))
-		return false;
-
-	Cuda_MergedArraySpec dstSpec;
-	if (!Cuda_GPUArray_pyMergeAxes(pydst, &dstSpec))
-		return false;
-
-	assert(srcSpec.ndim > 1 || dstSpec.ndim > 1);
-
-	if (srcSpec.ndim > dstSpec.ndim)
-		Cuda_GPUArray_promoteMergedArraySpec(&dstSpec, &srcSpec);
-	else if (srcSpec.ndim < dstSpec.ndim)
-		Cuda_GPUArray_promoteMergedArraySpec(&srcSpec, &dstSpec);
-
-	enum cudaMemcpyKind kind;
-
-	if (dstSpec.isDevice)
-		kind = srcSpec.isDevice ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
+	if (dst->onDevice)
+		return src->onDevice ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice;
 	else
-		kind = srcSpec.isDevice ? cudaMemcpyDeviceToHost : cudaMemcpyHostToHost;
+		return src->onDevice ? cudaMemcpyDeviceToHost : cudaMemcpyHostToHost;
+}
 
-	if (srcSpec.ndim == 2)
-		CUDA_CHECK(cudaMemcpy2D(
-			dstSpec.ptr, dstSpec.strides[0], srcSpec.ptr, srcSpec.strides[0],
-			srcSpec.shape[1] * srcSpec.strides[srcSpec.ndim - 1], srcSpec.shape[0], kind
-		), return false);
 
+static bool Cuda_memcpy2D(Cuda_MergedArraySpec *src, Cuda_MergedArraySpec *dst, Cuda_Stream *stream)
+{
+	assert(src->ndim == dst->ndim && src->ndim == 2);
+
+	size_t dpitch = dst->strides[0], spitch = src->strides[0];
+	size_t width = src->shape[1] * src->strides[src->ndim - 1], height = src->shape[0];
+
+	enum cudaMemcpyKind kind = Cuda_memcpyKind(src, dst);
+	cudaError_t status;
+
+	if (stream == NULL)
+		status = cudaMemcpy2D(dst->ptr, dpitch, src->ptr, spitch, width, height, kind);
 	else
-	{
-		struct cudaMemcpy3DParms memcpy;
+		status = cudaMemcpy2DAsync(dst->ptr, dpitch, src->ptr, spitch, width, height, kind, stream->stream);
 
-		memcpy.dstArray = NULL, memcpy.srcArray = NULL;
-		memcpy.dstPos = make_cudaPos(0, 0, 0), memcpy.srcPos = make_cudaPos(0, 0, 0);
+	CUDA_CHECK(status, return false);
+	return true;
+}
 
-		assert(dstSpec.strides[1] % dstSpec.strides[2] == 0);
-		assert(dstSpec.strides[0] % dstSpec.strides[1] == 0);
 
-		memcpy.dstPtr = make_cudaPitchedPtr(
-			dstSpec.ptr, dstSpec.strides[1], dstSpec.strides[1] / dstSpec.strides[2],
-			dstSpec.strides[0] / dstSpec.strides[1]
-		);
+static bool Cuda_memcpy3D(Cuda_MergedArraySpec *src, Cuda_MergedArraySpec *dst, Cuda_Stream *stream)
+{
+	assert(src->ndim == dst->ndim && src->ndim == 3);
+	struct cudaMemcpy3DParms memcpy;
 
-		assert(srcSpec.strides[1] % srcSpec.strides[2] == 0);
-		assert(srcSpec.strides[0] % srcSpec.strides[1] == 0);
+	memcpy.dstArray = NULL, memcpy.srcArray = NULL;
+	memcpy.dstPos = make_cudaPos(0, 0, 0), memcpy.srcPos = make_cudaPos(0, 0, 0);
 
-		memcpy.srcPtr = make_cudaPitchedPtr(
-			srcSpec.ptr, srcSpec.strides[1], srcSpec.strides[1] / srcSpec.strides[2],
-			srcSpec.strides[0] / srcSpec.strides[1]
-		);
+	assert(dst->strides[1] % dst->strides[2] == 0);
+	assert(dst->strides[0] % dst->strides[1] == 0);
 
-		memcpy.extent = make_cudaExtent(
-			srcSpec.shape[2] * srcSpec.strides[srcSpec.ndim - 1], srcSpec.shape[1], srcSpec.shape[0]
-		);
+	memcpy.dstPtr = make_cudaPitchedPtr(
+		dst->ptr, dst->strides[1], dst->strides[1] / dst->strides[2], dst->strides[0] / dst->strides[1]
+	);
 
-		memcpy.kind = kind;
-		CUDA_CHECK(cudaMemcpy3D(&memcpy), return false);
-	}
+	assert(src->strides[1] % src->strides[2] == 0);
+	assert(src->strides[0] % src->strides[1] == 0);
+
+	memcpy.srcPtr = make_cudaPitchedPtr(
+		src->ptr, src->strides[1], src->strides[1] / src->strides[2], src->strides[0] / src->strides[1]
+	);
+
+	memcpy.extent = make_cudaExtent(src->shape[2] * src->strides[src->ndim - 1], src->shape[1], src->shape[0]);
+
+	memcpy.kind = Cuda_memcpyKind(src, dst);
+	CUDA_CHECK((stream == NULL) ? cudaMemcpy3D(&memcpy) : cudaMemcpy3DAsync(&memcpy, stream->stream), return false);
 
 	return true;
 }
 
 
-PyDoc_STRVAR(Cuda_GPUArray_get_doc, "get(self) -> numpy.ndarray");
-static PyObject *Cuda_GPUArray_get(PyObject *self, PyObject *args)
+static bool Cuda_memcpyND(PyObject *pysrc, PyObject *pydst, Cuda_Stream *stream)
 {
-	(void)args;
-	Cuda_GPUArray *pyary = (Cuda_GPUArray *)self;
+	Cuda_MergedArraySpec srcSpec;
+	if (!Cuda_MergedArraySpec_initFromArray(&srcSpec, pysrc))
+		return false;
 
+	Cuda_MergedArraySpec dstSpec;
+	if (!Cuda_MergedArraySpec_initFromArray(&dstSpec, pydst))
+		return false;
+
+	assert(srcSpec.ndim > 1 || dstSpec.ndim > 1);
+	Cuda_MergedArraySpec *promoted = NULL, *base = NULL;
+
+	if (srcSpec.ndim > dstSpec.ndim)
+		promoted = &dstSpec, base = &srcSpec;
+	else if (srcSpec.ndim < dstSpec.ndim)
+		promoted = &srcSpec, base = &dstSpec;
+
+	if (promoted != NULL)
+		Cuda_MergedArraySpec_promote(promoted, base);
+
+	return (srcSpec.ndim == 2) ? Cuda_memcpy2D(&srcSpec, &dstSpec, stream) : Cuda_memcpy3D(&srcSpec, &dstSpec, stream);
+}
+
+
+static PyObject *Cuda_GPUArray_get(Cuda_GPUArray *self, Cuda_Stream *stream)
+{
 	npy_intp npshape[GPUARRAY_NDIM_LIMIT];
-	Cuda_GPUArray_shapeToNumpy(pyary, npshape);
+	Cuda_GPUArray_shapeToNumpy(self, npshape);
 
-	int typenum = Cuda_fromDataType(pyary->dtype);
+	int typenum = Cuda_dtypeToNumpy(self->dtype);
 
-	PyArrayObject *ary = (PyArrayObject *)PyArray_EMPTY((int)pyary->ndim, npshape, typenum, 0);
+	PyArrayObject *ary = (PyArrayObject *)PyArray_EMPTY((int)self->ndim, npshape, typenum, 0);
 	if (ary == NULL)
 		goto error_1;
 
-	if (pyary->contiguous)
-		CU_CHECK(cuMemcpyDtoH(
-			PyArray_DATA(ary), (CUdeviceptr)pyary->gpudata->ptr, Cuda_GPUArray_nbytes(pyary)
-		), goto error_2);
-
+	if (self->contiguous)
+	{
+		if (!Cuda_Buffer_get(self->gpudata, PyArray_DATA(ary), CUDA_GPUARRAY_NBYTES(self), stream))
+			goto error_2;
+	}
 	else
 	{
-		if (!Cuda_GPUArray_memcpyDiscontig(self, (PyObject *)ary))
+		if (!Cuda_memcpyND((PyObject *)self, (PyObject *)ary, stream))
 			goto error_2;
 	}
 
@@ -807,9 +827,22 @@ static PyObject *Cuda_GPUArray_get(PyObject *self, PyObject *args)
 
 error_2:
 	Py_DECREF(ary);
-
 error_1:
 	return NULL;
+}
+
+
+PyDoc_STRVAR(Cuda_GPUArray_pyGet_doc, "get(self, stream=None) -> numpy.ndarray");
+static PyObject *Cuda_GPUArray_pyGet(PyObject *self, PyObject *args, PyObject *kwds)
+{
+	const char *kwlist[] = {"stream", NULL};
+	Cuda_GPUArray *pyary = (Cuda_GPUArray *)self;
+
+	Cuda_Stream *stream = NULL;
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "|$O!", (char **)kwlist, Cuda_Stream_Type, &stream))
+		return NULL;
+
+	return Cuda_GPUArray_get(pyary, stream);
 }
 
 
@@ -827,11 +860,11 @@ inline static bool Cuda_GPUArray_compareShapeWithNumpy(const Cuda_GPUArray *self
 }
 
 
-static bool Cuda_GPUArray_setWithNumpy(Cuda_GPUArray *self, PyArrayObject *other)
+static bool Cuda_GPUArray_setWithNumpy(Cuda_GPUArray *self, PyArrayObject *other, Cuda_Stream *stream)
 {
-	if (Cuda_fromDataType(self->dtype) != PyArray_DTYPE(other)->type_num)
+	if (Cuda_dtypeToNumpy(self->dtype) != PyArray_DTYPE(other)->type_num)
 	{
-		PyErr_SetString(PyExc_ValueError, "gpuarray and input array types are not equal");
+		PyErr_SetString(PyExc_ValueError, "gpuarray and input array data types are not equal");
 		return false;
 	}
 
@@ -843,13 +876,12 @@ static bool Cuda_GPUArray_setWithNumpy(Cuda_GPUArray *self, PyArrayObject *other
 
 	if (self->contiguous && PyArray_IS_C_CONTIGUOUS(other))
 	{
-		CU_CHECK(
-			cuMemcpyHtoD((CUdeviceptr)self->gpudata->ptr, PyArray_DATA(other), Cuda_GPUArray_nbytes(self)), return false
-		);
+		if (!Cuda_Buffer_set(self->gpudata, PyArray_DATA(other), CUDA_GPUARRAY_NBYTES(self), stream))
+			return false;
 	}
 	else
 	{
-		if (!Cuda_GPUArray_memcpyDiscontig((PyObject *)other, (PyObject *)self))
+		if (!Cuda_memcpyND((PyObject *)other, (PyObject *)self, stream))
 			return false;
 	}
 
@@ -872,7 +904,7 @@ inline static bool Cuda_GPUArray_compareShapes(const Cuda_GPUArray *self, const 
 }
 
 
-static bool Cuda_GPUArray_set(Cuda_GPUArray *self, const Cuda_GPUArray *other)
+static bool Cuda_GPUArray_set(Cuda_GPUArray *self, const Cuda_GPUArray *other, Cuda_Stream *stream)
 {
 	if (self->dtype != other->dtype)
 	{
@@ -888,13 +920,12 @@ static bool Cuda_GPUArray_set(Cuda_GPUArray *self, const Cuda_GPUArray *other)
 
 	if (self->contiguous && other->contiguous)
 	{
-		CU_CHECK(
-			cuMemcpyDtoD((CUdeviceptr)self->gpudata->ptr, (CUdeviceptr)other->gpudata->ptr, Cuda_GPUArray_nbytes(other)
-		), return false);
+		if (!Cuda_Buffer_copy(other->gpudata, self->gpudata, CUDA_GPUARRAY_NBYTES(other), stream))
+			return false;
 	}
 	else
 	{
-		if (!Cuda_GPUArray_memcpyDiscontig((PyObject *)other, (PyObject *)self))
+		if (!Cuda_memcpyND((PyObject *)other, (PyObject *)self, stream))
 			return false;
 	}
 
@@ -902,25 +933,26 @@ static bool Cuda_GPUArray_set(Cuda_GPUArray *self, const Cuda_GPUArray *other)
 }
 
 
-PyDoc_STRVAR(Cuda_GPUArray_pySet_doc, "set(self, ary)");
+PyDoc_STRVAR(Cuda_GPUArray_pySet_doc, "set(self, ary, stream=None)");
 static PyObject *Cuda_GPUArray_pySet(PyObject *self, PyObject *args, PyObject *kwds)
 {
+	const char *kwlist[] = {"ary", "stream", NULL};
 	Cuda_GPUArray *pyary = (Cuda_GPUArray *)self;
 
-	const char *kwlist[] = {"ary", NULL};
 	PyObject *pyother;
+	Cuda_Stream *stream = NULL;
 
-	if (!PyArg_ParseTupleAndKeywords(args, kwds, "O", (char **)kwlist, &pyother))
+	if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|$O!", (char **)kwlist, &pyother, Cuda_Stream_Type, &stream))
 		return NULL;
 
 	if (Py_TYPE(pyother) == &PyArray_Type)
 	{
-		if (!Cuda_GPUArray_setWithNumpy(pyary, (PyArrayObject *)pyother))
+		if (!Cuda_GPUArray_setWithNumpy(pyary, (PyArrayObject *)pyother, stream))
 			return NULL;
 	}
 	else if (Py_TYPE(pyother) == Cuda_GPUArray_Type)
 	{
-		if (!Cuda_GPUArray_set(pyary, (Cuda_GPUArray *)pyother))
+		if (!Cuda_GPUArray_set(pyary, (Cuda_GPUArray *)pyother, stream))
 			return NULL;
 	}
 	else
@@ -939,9 +971,9 @@ static PyObject *Cuda_GPUArray_pySet(PyObject *self, PyObject *args, PyObject *k
 PyDoc_STRVAR(Cuda_GPUArray_copy_doc, "copy(self, allocator=None) -> " CUDA_GPUARRAY_FULLNAME);
 static PyObject *Cuda_GPUArray_copy(PyObject *self, PyObject *args, PyObject *kwds)
 {
-	Cuda_GPUArray *pyary = (Cuda_GPUArray *)self;
-
 	const char *kwlist[] = {"allocator", NULL};
+
+	Cuda_GPUArray *pyary = (Cuda_GPUArray *)self;
 	PyObject *pyalloc = NULL;
 
 	if (!PyArg_ParseTupleAndKeywords(args, kwds, "|O", (char **)kwlist, &pyalloc))
@@ -953,20 +985,20 @@ static PyObject *Cuda_GPUArray_copy(PyObject *self, PyObject *args, PyObject *kw
 	Cuda_MemoryPool *allocator = (Cuda_MemoryPool *)pyalloc;
 
 	Cuda_ArraySpec spec;
-	Cuda_GPUArray_toSpecAsContiguous(pyary, &spec);
+	Cuda_ArraySpec_initFromGPUArray(&spec, pyary);
 
 	Cuda_GPUArray *dst = Cuda_GPUArray_newWithAllocator(allocator, NULL, &spec);
 	if (dst == NULL)
 		return NULL;
 
 	if (pyary->contiguous)
-		CU_CHECK(cuMemcpyDtoD(
-			(CUdeviceptr)dst->gpudata->ptr, (CUdeviceptr)pyary->gpudata->ptr, Cuda_GPUArray_nbytes(pyary)
-		), goto error);
-
+	{
+		if (!Cuda_Buffer_copy(pyary->gpudata, dst->gpudata, CUDA_GPUARRAY_NBYTES(pyary), NULL))
+			goto error;
+	}
 	else
 	{
-		if (!Cuda_GPUArray_memcpyDiscontig(self, (PyObject *)dst))
+		if (!Cuda_memcpyND(self, (PyObject *)dst, NULL))
 			goto error;
 	}
 
@@ -993,7 +1025,7 @@ static PyObject *Cuda_GPUArray_toString(PyObject *self)
 	CUDA_CHECK(cudaGetDevice(&device), goto error_1);
 	CUDA_CHECK(cudaSetDevice(pyary->gpudata->device), goto error_1);
 
-	PyObject *ary; ary = Cuda_GPUArray_get(self, NULL);
+	PyObject *ary; ary = Cuda_GPUArray_get(pyary, NULL);
 	if (ary == NULL)
 		goto error_2;
 
@@ -1024,7 +1056,9 @@ static PyObject *Cuda_GPUArray_zeros(PyObject *type, PyObject *args, PyObject *k
 	if (pyary == NULL)
 		return NULL;
 
-	CU_CHECK(cuMemsetD8((CUdeviceptr)pyary->gpudata->ptr, 0, Cuda_GPUArray_nbytes(pyary)), goto error);
+	if (!Cuda_Buffer_fillD8(pyary->gpudata, 0, CUDA_GPUARRAY_NBYTES(pyary), NULL))
+		goto error;
+
 	return (PyObject *)pyary;
 
 error:
@@ -1039,15 +1073,12 @@ static Cuda_GPUArray *Cuda_GPUArray_emptyLike(PyObject *pyary, Cuda_MemoryPool *
 
 	if (PyArray_CheckExact(pyary))
 	{
-		PyArrayObject *ary = (PyArrayObject *)pyary;
-
-		if (!Cuda_numpyToSpecAsContiguous(ary, &spec))
+		if (!Cuda_ArraySpec_initFromNumpy(&spec, (PyArrayObject *)pyary))
 			return NULL;
 	}
 	else if (Py_TYPE(pyary) == Cuda_GPUArray_Type)
 	{
-		Cuda_GPUArray *ary = (Cuda_GPUArray *)pyary;
-		Cuda_GPUArray_toSpecAsContiguous(ary, &spec);
+		Cuda_ArraySpec_initFromGPUArray(&spec, (Cuda_GPUArray *)pyary);
 	}
 	else
 	{
@@ -1105,7 +1136,9 @@ static PyObject *Cuda_GPUArray_zerosLike(PyObject *type, PyObject *args, PyObjec
 	if (pyary == NULL)
 		return NULL;
 
-	CU_CHECK(cuMemsetD8((CUdeviceptr)pyary->gpudata->ptr, 0, Cuda_GPUArray_nbytes(pyary)), goto error);
+	if (!Cuda_Buffer_fillD8(pyary->gpudata, 0, CUDA_GPUARRAY_NBYTES(pyary), NULL))
+		goto error;
+
 	return (PyObject *)pyary;
 
 error:
@@ -1136,13 +1169,13 @@ static PyObject *Cuda_GPUArray_toGpu(PyObject *type, PyObject *args, PyObject *k
 		return NULL;
 
 	if (PyArray_IS_C_CONTIGUOUS(ary))
-		CU_CHECK(cuMemcpyHtoD(
-			(CUdeviceptr)pyary->gpudata->ptr, PyArray_DATA(ary), Cuda_GPUArray_nbytes(pyary)
-		), goto error);
-
+	{
+		if (!Cuda_Buffer_set(pyary->gpudata, PyArray_DATA(ary), CUDA_GPUARRAY_NBYTES(pyary), NULL))
+			goto error;
+	}
 	else
 	{
-		if (!Cuda_GPUArray_memcpyDiscontig((PyObject *)ary, (PyObject *)pyary))
+		if (!Cuda_memcpyND((PyObject *)ary, (PyObject *)pyary, NULL))
 			goto error;
 	}
 
@@ -1397,14 +1430,14 @@ static PyObject *Cuda_GPUArray_getPtr(PyObject *self, void *closure)
 static PyObject *Cuda_GPUArray_getNbytes(PyObject *self, void *closure)
 {
 	(void)closure;
-	return PyLong_FromSize_t(Cuda_GPUArray_nbytes((Cuda_GPUArray *)self));
+	return PyLong_FromSize_t(CUDA_GPUARRAY_NBYTES((Cuda_GPUArray *)self));
 }
 
 
 static PyObject *Cuda_GPUArray_getDtype(PyObject *self, void *closure)
 {
 	(void)closure;
-	return (PyObject *)PyArray_DescrFromType(Cuda_fromDataType(((Cuda_GPUArray *)self)->dtype));
+	return (PyObject *)PyArray_DescrFromType(Cuda_dtypeToNumpy(((Cuda_GPUArray *)self)->dtype));
 }
 
 
@@ -1456,7 +1489,7 @@ static PyMethodDef Cuda_GPUArray_methods[] = {
 	{"view", (PyCFunction)Cuda_GPUArray_view, METH_VARARGS | METH_KEYWORDS, Cuda_GPUArray_view_doc},
 	{"ravel", Cuda_GPUArray_ravel, METH_NOARGS, Cuda_GPUArray_ravel_doc},
 
-	{"get", Cuda_GPUArray_get, METH_NOARGS, Cuda_GPUArray_get_doc},
+	{"get", (PyCFunction)Cuda_GPUArray_pyGet, METH_VARARGS | METH_KEYWORDS, Cuda_GPUArray_pyGet_doc},
 	{"set", (PyCFunction)Cuda_GPUArray_pySet, METH_VARARGS | METH_KEYWORDS, Cuda_GPUArray_pySet_doc},
 	{"copy", (PyCFunction)Cuda_GPUArray_copy, METH_VARARGS | METH_KEYWORDS, Cuda_GPUArray_copy_doc},
 

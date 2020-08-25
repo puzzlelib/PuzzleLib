@@ -6,8 +6,6 @@ import h5py
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import SharedArray, streamManager
-
 from PuzzleLib.Variable import Variable
 
 
@@ -42,7 +40,7 @@ class Optimizer:
 
 	def addHook(self, hook):
 		if self.globalState and Config.showWarnings:
-			print("[%s] Warning: adding hook to optimizer in global state mode" % Config.libname)
+			Config.getLogger().info("Warning: adding hook to optimizer in global state mode")
 
 		self.hooks.append(hook)
 
@@ -78,8 +76,8 @@ class Optimizer:
 
 			shape, dtype = var.data.shape, var.data.dtype.type
 
-			shParams = self.shParams.get(dtype, SharedArray(dtype))
-			shGrads = self.shGrads.get(dtype, SharedArray(dtype))
+			shParams = self.shParams.get(dtype, gpuarray.SharedArray(dtype))
+			shGrads = self.shGrads.get(dtype, gpuarray.SharedArray(dtype))
 
 			shParams.register(var.data.shape, var.data.dtype.type, names[0])
 			shGrads.register(var.grad.shape, var.grad.dtype.type, names[0])
@@ -173,7 +171,7 @@ class Optimizer:
 
 
 	def updateLocalStates(self, useStreams, sync):
-		streams = streamManager.borrow(len(self.states)) if useStreams else None
+		streams = gpuarray.streamManager.borrow(len(self.states)) if useStreams else None
 
 		for i, (name, state) in enumerate(self.states.items()):
 			var = self.module.getVar(name)
@@ -194,7 +192,7 @@ class Optimizer:
 				for stream in streams:
 					stream.synchronize()
 
-			streamManager.give(streams)
+			gpuarray.streamManager.give(streams)
 
 
 	def updateVar(self, var, state, stream=None):

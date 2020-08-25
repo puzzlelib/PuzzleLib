@@ -220,7 +220,7 @@ static PyObject *CuDnn_Rnn_new(PyTypeObject *type, PyObject *args, PyObject *kwd
 
 	CuDnn_Rnn *self = NULL;
 
-	Cuda_DataType dtype = Cuda_toDataType(pytype->type_num);
+	Cuda_DataType dtype = Cuda_numpyToDataType(pytype->type_num);
 	if (dtype == DTYPE_INVALID)
 		goto error_1;
 

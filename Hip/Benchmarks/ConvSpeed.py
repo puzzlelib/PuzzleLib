@@ -1,6 +1,6 @@
 import numpy as np
 
-from PuzzleLib import Config
+from PuzzleLib.Hip.Backend import getBackend
 from PuzzleLib.Cuda.Benchmarks.ConvSpeed import timeConv
 
 
@@ -10,9 +10,7 @@ def main():
 
 	stride, pad, dilation, groups = 1, 0, 1, datashape[1] // Wshape[1]
 
-	from PuzzleLib.Hip.Backend import getBackend
-	backend = getBackend(Config.deviceIdx, initmode=1)
-
+	backend = getBackend(initmode=1)
 	timeConv(backend, datashape, Wshape, np.float32, stride, pad, dilation, groups)
 
 

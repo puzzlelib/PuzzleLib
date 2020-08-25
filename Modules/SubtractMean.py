@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray, Blas
-from PuzzleLib.Backend.Dnn.Basic import PoolMode, poolNd, poolNdBackward
+from PuzzleLib.Backend.Dnn import PoolMode, poolNd, poolNdBackward
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 
@@ -24,14 +24,16 @@ class SubtractMean(Module):
 
 
 	def updateData(self, data):
-		self.means, self.workspace = poolNd(data, size=self.size, stride=1, pad=self.pad, mode=self.mode,
-											test=not self.train)
+		self.means, self.workspace = poolNd(
+			data, size=self.size, stride=1, pad=self.pad, mode=self.mode, test=not self.train
+		)
 		self.data = Blas.addVectorToVector(data.ravel(), self.means.ravel(), beta=-1.0).reshape(*data.shape)
 
 
 	def updateGrad(self, grad):
-		meansGrad = poolNdBackward(self.inData, self.means, grad, self.workspace,
-								   size=self.size, stride=1, pad=self.pad, mode=self.mode)
+		meansGrad = poolNdBackward(
+			self.inData, self.means, grad, self.workspace, size=self.size, stride=1, pad=self.pad, mode=self.mode
+		)
 
 		Blas.addVectorToVector(grad.ravel(), meansGrad.ravel(), out=meansGrad.ravel(), beta=-1.0)
 		self.grad = meansGrad

@@ -1,25 +1,6 @@
+import numpy as np
+
 from PuzzleLib.Grid import runGrid
-
-
-def buildNet():
-	from PuzzleLib.Containers import Sequential
-	from PuzzleLib.Modules import Conv2D, MaxPool2D, Activation, relu, Flatten, Linear
-
-	seq = Sequential(name="lenet-5-like")
-	seq.append(Conv2D(1, 16, 3))
-	seq.append(MaxPool2D())
-	seq.append(Activation(relu))
-
-	seq.append(Conv2D(16, 32, 4))
-	seq.append(MaxPool2D())
-	seq.append(Activation(relu))
-
-	seq.append(Flatten())
-	seq.append(Linear(32 * 5 * 5, 1024))
-	seq.append(Activation(relu))
-
-	seq.append(Linear(1024, 10))
-	return seq
 
 
 def train(nodeinfo, verbose):
@@ -30,21 +11,21 @@ def train(nodeinfo, verbose):
 	data, labels = data[:], labels[:]
 	print("[%s]: Loaded mnist" % nodeinfo.index)
 
-	import numpy as np
 	np.random.seed(1234)
 
-	seq = buildNet()
+	from PuzzleLib.Models.Nets.LeNet import loadLeNet
+	net = loadLeNet(None, initscheme=None)
 
 	from PuzzleLib.Optimizers import MomentumSGD
 	optimizer = MomentumSGD(learnRate=0.1, momRate=0.9, nodeinfo=nodeinfo)
-	optimizer.setupOn(seq, useGlobalState=True)
+	optimizer.setupOn(net, useGlobalState=True)
 
 	from PuzzleLib.Cost import CrossEntropy
 	cost = CrossEntropy(maxlabels=10)
 
 	from PuzzleLib.Handlers import Trainer, Validator
-	trainer = Trainer(seq, cost, optimizer, batchsize=128 // nodeinfo.gridsize)
-	validator = Validator(seq, cost)
+	trainer = Trainer(net, cost, optimizer, batchsize=128 // nodeinfo.gridsize)
+	validator = Validator(net, cost)
 
 	valsize = 10000
 	trainsize = data.shape[0] - valsize

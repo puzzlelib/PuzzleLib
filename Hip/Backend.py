@@ -1,7 +1,5 @@
 from enum import Enum
 
-from PuzzleLib import Config
-
 from PuzzleLib.Cuda.GPUBackend import GPUBackend
 from PuzzleLib.Cuda.Kernels.Memory import MemoryModule
 
@@ -56,25 +54,21 @@ class HipBackend(GPUBackend):
 	RNNAlgo, RNNMode, DirectionMode = MIOpenRnn.RNNAlgo, MIOpenRnn.RNNMode, MIOpenRnn.DirectionMode
 
 
-	def __init__(self, deviceIdx, initmode=0):
+	def __init__(self, deviceIdx, initmode=0, logger=None):
 		self.memmod = None
-		super().__init__(deviceIdx, initmode)
+		super().__init__(deviceIdx, initmode, logger=logger)
 
 
-	def initLibs(self):
+	def initLibs(self, logger=None):
 		self.blas = self.Blas.BlasContext().enableTensorOps(True)
-		if Config.systemLog:
-			print(
-				"[%s] Created %s context (Using version: %s)" %
-				(Config.libname, self.Blas.__name__, self.blas.getVersion())
-			)
+
+		if logger is not None:
+			logger.debug("Created %s context (Using version: %s)", self.Blas.__name__, self.blas.getVersion())
 
 		self.dnn = self.Dnn.DnnContext(self).enableTensorOps(True)
-		if Config.systemLog:
-			print(
-				"[%s] Created %s context (Using version: %s)" %
-				(Config.libname, self.Dnn.__name__, self.dnn.getVersion())
-			)
+
+		if logger is not None:
+			logger.debug("Created %s context (Using version: %s)", self.Dnn.__name__, self.dnn.getVersion())
 
 
 	def initKernels(self):
@@ -328,14 +322,14 @@ def getDeviceCount():
 	return HipBackend.Driver.Device.count()
 
 
-def getBackend(deviceIdx, initmode=0):
+def getBackend(deviceIdx=0, initmode=0, logger=None):
 	bnd = backendCache.get(deviceIdx, None)
 
 	if bnd is None:
-		bnd = HipBackend(deviceIdx, initmode)
+		bnd = HipBackend(deviceIdx, initmode, logger=logger)
 		backendCache[deviceIdx] = bnd
 
 	else:
-		bnd.updateBackend(initmode)
+		bnd.updateBackend(initmode, logger=logger)
 
 	return bnd

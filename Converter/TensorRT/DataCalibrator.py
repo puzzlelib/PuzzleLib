@@ -1,8 +1,9 @@
 import ctypes
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+import numpy as np
 
+from PuzzleLib.Backend import gpuarray
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Converter.TensorRT import Driver
 
 
@@ -11,24 +12,29 @@ class CalibratorError(Exception):
 
 
 class DataCalibrator(Driver.ICalibrator):
-	def __init__(self, data, batchsize=100, cachename=None, dataname=None):
-		super().__init__()
+	def __init__(self, data, batchsize=100, cachename=None):
+		super().__init__("" if cachename is None else cachename)
+
+		if data is None:
+			if cachename is None:
+				raise CalibratorError("Invalid calibration cache file")
+
+			self.nbatches = 0
+
+		else:
+			if data.shape[0] % batchsize != 0:
+				raise CalibratorError("TensorRT calibration engine requires data size to be divisible by batch size")
+
+			if data.dtype != np.float32:
+				raise CalibratorError("Invalid data type")
+
+			self.nbatches = data.shape[0] // batchsize
 
 		self.data = data
-
 		self.idx = 0
-		self.offset = 0
 
-		self.nbatches = (data.shape[0] + batchsize - 1) // batchsize
 		self.batchsize = batchsize
-
-		if cachename is not None:
-			raise NotImplementedError()
-
-		self.cachename = cachename
-		self.dataname = dataname
-
-		self.cache = None
+		self.batch = None
 
 
 	def getDataShape(self):
@@ -36,29 +42,23 @@ class DataCalibrator(Driver.ICalibrator):
 
 
 	def getBatchSize(self):
-		batchsize = min(self.data.shape[0] - self.offset, self.batchsize)
-		return batchsize
+		return self.batchsize
 
 
 	def getBatch(self, bindings, names):
-		assert len(bindings) == 1
+		assert len(bindings) == 1 and len(names) == 1
 
-		if self.dataname is not None:
-			assert names[0] == self.dataname
-
-		batchsize = self.getBatchSize()
-		if batchsize == 0:
+		if self.idx >= self.nbatches:
 			return False
 
-		batch = self.data[self.offset:self.offset + batchsize]
-		self.offset += batchsize
+		self.batch = gpuarray.to_gpu(
+			self.data[self.idx * self.batchsize:(self.idx + 1) * self.batchsize], allocator=memPool
+		)
 
-		batch = gpuarray.to_gpu(batch, allocator=memPool)
+		ptr = ctypes.cast(bindings[0], ctypes.POINTER(ctypes.c_void_p))
+		ptr.contents.value = self.batch.ptr
 
-		ptr = ctypes.cast(int(bindings[0]), ctypes.POINTER(ctypes.c_void_p))
-		ptr.contents.value = batch.ptr
-
-		print("Sending batch #%s (%s out of %s)" % (self.idx, self.idx + 1, self.nbatches))
+		print("Sending batch #%s out of %s" % (self.idx + 1, self.nbatches))
 		self.idx += 1
 
 		return True

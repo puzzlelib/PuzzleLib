@@ -1,4 +1,4 @@
-import os, stat, shutil
+import os, stat, shutil, subprocess
 from enum import Enum
 
 from setuptools import setup, find_packages
@@ -7,7 +7,7 @@ from setuptools.command.sdist import sdist
 
 
 libname = "PuzzleLib"
-version = "1.0.1"
+version = "1.0.2"
 
 
 class Options(str, Enum):
@@ -58,11 +58,16 @@ class InstallCommand(install):
 		(
 			"converter=", None,
 			"desired converter which will be included. Possible entries: tensorrt, openvino; through comma if both"
+		),
+		(
+			"no-runtime-check", None,
+			"omit runtime check for backends"
 		)
 	]
 
 
 	backend, converter = "", ""
+	no_runtime_check = 0
 
 	projectPath = os.path.dirname(os.path.abspath(__file__))
 	cachePath = os.path.join(projectPath, libname)
@@ -206,10 +211,9 @@ class InstallCommand(install):
 		return data
 
 
-	@staticmethod
-	def installGpuPackage(name, checkInstall, buildDriver, dst):
+	def installGpuPackage(self, name, checkInstall, buildDriver, dst):
 		print("\nChecking if all dependencies for %s are satisfied ..." % name)
-		checkInstall(withPip=False)
+		checkInstall(withRuntime=not self.no_runtime_check, withPip=False)
 
 		cwd = os.getcwd()
 		try:
@@ -385,7 +389,7 @@ class SdistCommand(sdist):
 
 
 	@staticmethod
-	def distributePackages(path, handlers):
+	def distributePackages(path, handlers, initPath=False):
 		initfiles = []
 		data = {}
 
@@ -394,6 +398,9 @@ class SdistCommand(sdist):
 
 			data.update(pkgData)
 			initfiles.extend(pkgInitfiles)
+
+		if initPath:
+			initfiles.append(init(path))
 
 		return initfiles, data
 
@@ -422,10 +429,7 @@ class SdistCommand(sdist):
 			("OpenVINO", self.distributeOpenVINOPackage)
 		]
 
-		initfiles, data = self.distributePackages(path, handlers)
-		initfiles.append(init(path))
-
-		return initfiles, data
+		return self.distributePackages(path, handlers, True)
 
 
 	def distributeTensorRTPackage(self, path):
@@ -439,10 +443,10 @@ class SdistCommand(sdist):
 	def distributeDataPackage(self, path):
 		data = ["test.tar", "test.zip"]
 
-		inits, pkgData = self.distributePythonPackage(path)
+		initfiles, pkgData = self.distributePythonPackage(path)
 		pkgData.update({pathToPackageName(path, withLibname=False): data})
 
-		return inits, pkgData
+		return initfiles, pkgData
 
 
 def main():

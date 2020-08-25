@@ -7,7 +7,6 @@ from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Backend.Kernels.Embedder import embed, embedBackwardParams
-from PuzzleLib.Backend.Utils import dtypesSupported
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -188,7 +187,7 @@ class Embedder(Module):
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
+	for dtype, atol in gpuarray.dtypesSupported():
 		calcTest(dtype, atol)
 
 	verifyDataTest()

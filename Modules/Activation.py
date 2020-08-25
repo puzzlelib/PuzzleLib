@@ -5,7 +5,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported, memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 
 from PuzzleLib.Backend.Kernels.ElementWise import sigmoidKer, sigmoidDerKer, tanhKer, tanhDerKer, reluKer, reluDerKer
 from PuzzleLib.Backend.Kernels.ElementWise import leakyReluKer, leakyReluDerKer, eluKer, eluDerKer
@@ -39,10 +39,10 @@ class Activation(Module):
 		self.registerBlueprint(locals())
 
 		self.gradUsesOutData = True
-
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 		activation = ActivationType(activation)
 
@@ -85,7 +85,7 @@ class Activation(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -131,7 +131,7 @@ def unittest():
 		)
 	}
 
-	for dtype, atol in dtypesSupported():
+	for dtype, atol in gpuarray.dtypesSupported():
 		for acttype, hostAct in actFuncs.items():
 			actTest(acttype, hostAct, dtype, atol)
 

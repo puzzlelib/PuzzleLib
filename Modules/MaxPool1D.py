@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Dnn.Basic import PoolMode, poolNd, poolNdBackward
+from PuzzleLib.Backend.Dnn import PoolMode, poolNd, poolNdBackward
 from PuzzleLib.Backend.Kernels import Pool
 
 from PuzzleLib.Modules.Pool1D import Pool1D

@@ -1,4 +1,6 @@
 from enum import Enum
+import itertools
+
 import numpy as np
 
 from PuzzleLib.CPU.CPUArray import CPUArray
@@ -20,38 +22,41 @@ def repeatValue(val, ntimes):
 		raise NotImplementedError(val.__class__.__name__)
 
 
-def outshape(inshape, size, stride, pad):
+def outshape(inshape, size, stride, pad, dilation):
 	inh, inw = inshape
 
-	hsize, wsize = size
+	fh, fw = size
 	hstride, wstride = stride
 	hpad, wpad = pad
+	hdilation, wdilation = dilation
 
-	outh = (inh + 2 * hpad - hsize) // hstride + 1
-	outw = (inw + 2 * wpad - wsize) // wstride + 1
+	outh = (inh + 2 * hpad - hdilation * (fh - 1) - 1) // hstride + 1
+	outw = (inw + 2 * wpad - wdilation * (fw - 1) - 1) // wstride + 1
 
 	return outh, outw
 
 
-def im2col(data, size, stride, pad):
+def im2col(data, size, stride, pad, dilation, padval=0):
 	assert data.ndim == 4
 
-	hsize, wsize = size
+	fh, fw = size
 	hstride, wstride = stride
 	hpad, wpad = pad
+	hdilation, wdilation = dilation
 
 	batchsize, maps, inh, inw = data.shape
-	outh, outw = outshape((inh, inw), size, stride, pad)
+	outh, outw = outshape((inh, inw), size, stride, pad, dilation)
 
-	data = np.pad(data, ((0, 0), (0, 0), (hpad, hpad), (wpad, wpad)), mode="constant", constant_values=0)
+	if hpad > 0 or wpad > 0:
+		data = np.pad(data, ((0, 0), (0, 0), (hpad, hpad), (wpad, wpad)), mode="constant", constant_values=padval)
 
 	strides = (
 		data.strides[0], hstride * data.strides[2], wstride * data.strides[3],
-		data.strides[1], data.strides[2], data.strides[3]
+		data.strides[1], data.strides[2] * hdilation, data.strides[3] * wdilation
 	)
 
-	coldata = np.lib.stride_tricks.as_strided(data, shape=(batchsize, outh, outw, maps, hsize, wsize), strides=strides)
-	coldata = coldata.reshape(batchsize * outh * outw, maps * hsize * wsize)
+	coldata = np.lib.stride_tricks.as_strided(data, shape=(batchsize, outh, outw, maps, fh, fw), strides=strides)
+	coldata = coldata.reshape(batchsize * outh * outw, maps * fh * fw)
 
 	return coldata
 
@@ -75,16 +80,16 @@ def linear(data, W, bias):
 	return outdata
 
 
-def conv2d(data, W, bias=None, stride=1, pad=0):
+def conv2d(data, W, bias=None, stride=1, pad=0, dilation=1):
 	assert data.ndim == 4 and W.ndim == 4
 
 	batchsize, _, inh, inw = data.shape
-	stride, pad = repeatValue(stride, 2), repeatValue(pad, 2)
+	stride, pad, dilation = repeatValue(stride, 2), repeatValue(pad, 2), repeatValue(dilation, 2)
 
 	outmaps, _, hsize, wsize = W.shape
-	outh, outw = outshape((inh, inw), (hsize, wsize), stride, pad)
+	outh, outw = outshape((inh, inw), (hsize, wsize), stride, pad, dilation)
 
-	coldata = im2col(data.data, W.shape[2:], stride, pad)
+	coldata = im2col(data.data, W.shape[2:], stride, pad, dilation)
 	W = W.data.reshape(W.shape[0], -1).T
 
 	bias = bias.data.reshape(1, bias.shape[1]) if bias is not None else None
@@ -101,9 +106,9 @@ def pool2d(data, size=2, stride=2, pad=0, mode=PoolMode.max):
 	batchsize, maps, inh, inw = data.shape
 	size, stride, pad = repeatValue(size, 2), repeatValue(stride, 2), repeatValue(pad, 2)
 
-	outh, outw = outshape((inh, inw), size, stride, pad)
+	outh, outw = outshape((inh, inw), size, stride, pad, (1, 1))
 
-	coldata = im2col(data.data.reshape(batchsize * maps, 1, inh, inw), size, stride, pad)
+	coldata = im2col(data.data.reshape(batchsize * maps, 1, inh, inw), size, stride, pad, (1, 1), padval=-np.inf)
 	outdata = onRow(coldata, axis=1, keepdims=True).reshape((batchsize, maps, outh, outw))
 
 	return CPUArray(outdata.shape, outdata.dtype, data=outdata, acquire=True)
@@ -116,11 +121,17 @@ def batchNorm2d(data, scale, bias, mean, var, epsilon=1e-5, test=False, out=None
 	scale = scale.data / np.sqrt(var.data + epsilon)
 	outdata = scale * (data.data - mean.data) + bias.data
 
-	return CPUArray(outdata.shape, outdata.dtype, data=outdata, acquire=True)
+	if out is None:
+		out = CPUArray(outdata.shape, outdata.dtype, data=outdata, acquire=True)
+	else:
+		out.set(outdata)
+
+	return out
 
 
 def unittest():
 	conv2dTest()
+	conv2dExtTest()
 	maxpool2dTest()
 	batchNorm2dTest()
 
@@ -129,75 +140,97 @@ def conv2dTest():
 	batchsize, inmaps, h, w = 1, 2, 6, 6
 	fsize, outmaps = 2, 4
 
-	data = CPUArray.toDevice(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = CPUArray.toDevice(hostData)
 
-	W = CPUArray.toDevice(np.random.randn(outmaps, inmaps, fsize, fsize).astype(np.float32))
-	bias = CPUArray.toDevice(np.random.randn(1, outmaps, 1, 1).astype(np.float32))
+	hostW = np.random.randn(outmaps, inmaps, fsize, fsize).astype(np.float32)
+	hostBias = np.random.randn(1, outmaps, 1, 1).astype(np.float32)
 
+	W, bias = CPUArray.toDevice(hostW), CPUArray.toDevice(hostBias)
 	outdata = conv2d(data, W, bias)
 
-	hostData, hostW, hostBias = data.get(), W.get(), bias.get()
 	hostOutData = np.empty(outdata.shape, dtype=np.float32)
 
 	for c in range(outmaps):
 		hostOutData[:, c, :, :] = hostBias[0, c, 0, 0]
 
-	for b in range(batchsize):
-		for oc in range(outmaps):
-			for ic in range(inmaps):
-				for y in range(outdata.shape[2]):
-					for x in range(outdata.shape[3]):
-						for dy in range(fsize):
-							for dx in range(fsize):
-								hostOutData[b, oc, y, x] += hostData[b, ic, y + dy, x + dx] * hostW[oc, ic, dy, dx]
+	for b, oc, ic, y, x, dy, dx in itertools.product(
+		range(batchsize), range(outmaps), range(inmaps), range(outdata.shape[2]), range(outdata.shape[3]),
+		range(fsize), range(fsize)
+	):
+		hostOutData[b, oc, y, x] += hostData[b, ic, y + dy, x + dx] * hostW[oc, ic, dy, dx]
+
+	assert np.allclose(hostOutData, outdata.get())
+
+
+def conv2dExtTest():
+	batchsize, inmaps, h, w = 3, 4, 3, 3
+	outmaps, fsize, stride, pad, dilation = 4, 3, 2, 2, 2
+
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = CPUArray.toDevice(hostData)
+
+	hostW = np.random.randn(outmaps, inmaps, fsize, fsize).astype(np.float32)
+	hostBias = np.random.randn(1, outmaps, 1, 1).astype(np.float32)
+
+	W, bias = CPUArray.toDevice(hostW), CPUArray.toDevice(hostBias)
+	outdata = conv2d(data, W, bias, stride, pad, dilation)
+
+	dl = dilation
+	hostExtData = np.zeros(shape=(batchsize, inmaps, h + 2 * pad, w + 2 * pad))
+
+	hostExtData[:, :, pad:-pad, pad:-pad] = hostData
+	hostData = hostExtData
+
+	hostOutData = np.empty(outdata.shape, dtype=np.float32)
+	for c in range(outmaps):
+		hostOutData[:, c, :, :] = hostBias[0, c, 0, 0]
+
+	for b, oc, ic, y, x, dy, dx in itertools.product(
+		range(batchsize), range(outmaps), range(inmaps), range(outdata.shape[2]), range(outdata.shape[3]),
+		range(fsize), range(fsize)
+	):
+		hostOutData[b, oc, y, x] += hostData[b, ic, y * stride + dy * dl, x * stride + dx * dl] * hostW[oc, ic, dy, dx]
 
 	assert np.allclose(hostOutData, outdata.get())
 
 
 def maxpool2dTest():
-	batchsize, maps, h, w = 1, 1, 8, 8
-	data = CPUArray.toDevice(np.random.randn(batchsize, maps, h, w).astype(np.float32))
+	batchsize, maps, h, w = 3, 2, 6, 6
+	size, stride, pad = 3, 2, 1
 
-	outdata = pool2d(data)
+	hostData = np.full(shape=(batchsize, maps, h + 2 * pad, w + 2 * pad), fill_value=-np.inf, dtype=np.float32)
+	hostData[:, :, pad:-pad, pad:-pad] = np.random.randn(batchsize, maps, h, w).astype(np.float32)
 
-	def maxDownSample2d(dat, factor):
-		trimrows = dat.shape[0] // factor * factor
-		trimcols = dat.shape[1] // factor * factor
+	data = CPUArray.toDevice(hostData[:, :, pad:-pad, pad:-pad])
+	outdata = pool2d(data, size=size, stride=stride, pad=pad, mode=PoolMode.max)
 
-		maxSoFar = None
-		first = True
+	hostOutData = np.empty(outdata.shape, dtype=np.float32)
 
-		for coff in range(factor):
-			for roff in range(factor):
-				hopped = dat[roff:trimrows:factor, coff:trimcols:factor]
-				if first:
-					maxSoFar = hopped
-					first = False
-				else:
-					maxSoFar = np.maximum(maxSoFar, hopped)
+	for b, c, y, x in itertools.product(
+		range(batchsize), range(maps), range(hostOutData.shape[2]), range(hostOutData.shape[3])
+	):
+		hostOutData[b, c, y, x] = np.max(hostData[b, c, y * stride:y * stride + size, x * stride:x * stride + size])
 
-		return maxSoFar
-
-	hostOutData = maxDownSample2d(data.get()[0, 0], 2)
 	assert np.allclose(hostOutData, outdata.get())
 
 
 def batchNorm2dTest():
 	batchsize, maps, h, w = 4, 5, 3, 2
 
-	data = CPUArray.toDevice(np.random.randn(batchsize, maps, h, w).astype(np.float32))
-	hostData = data.get()
+	hostData = np.random.randn(batchsize, maps, h, w).astype(np.float32)
+	data = CPUArray.toDevice(hostData)
 
-	scale = CPUArray.toDevice(np.random.randn(1, maps, 1, 1).astype(np.float32))
-	bias = CPUArray.toDevice(np.random.randn(1, maps, 1, 1).astype(np.float32))
-	mean = CPUArray.toDevice(np.random.randn(1, maps, 1, 1).astype(np.float32))
-	var = CPUArray.toDevice(
-		(np.ones((1, maps, 1, 1)).astype(np.float32) + np.random.randn(1, maps, 1, 1).astype(np.float32))**2
-	)
+	hostScale = np.random.randn(1, maps, 1, 1).astype(np.float32)
+	hostBias = np.random.randn(1, maps, 1, 1).astype(np.float32)
+	hostMean = np.random.randn(1, maps, 1, 1).astype(np.float32)
+	hostVar = np.ones((1, maps, 1, 1)).astype(np.float32) + np.random.randn(1, maps, 1, 1).astype(np.float32)**2
+
+	scale, bias = CPUArray.toDevice(hostScale), CPUArray.toDevice(hostBias)
+	mean, var = CPUArray.toDevice(hostMean), CPUArray.toDevice(hostVar)
 
 	outdata = batchNorm2d(data, scale, bias, mean, var, test=True)
 
-	hostScale, hostBias, hostMean, hostVar = scale.get(), bias.get(), mean.get(), var.get()
 	hostNormData = np.empty(hostData.shape, dtype=np.float32)
 	hostOutData = np.empty(hostData.shape, dtype=np.float32)
 

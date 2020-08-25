@@ -1,20 +1,20 @@
 from PuzzleLib.Backend import gpuarray
 
-from PuzzleLib import Visual
 from PuzzleLib.Modules import SubtractMean, LCN
+from PuzzleLib.Visual import loadImage, showImage
 
 
 def main():
 	subtractMean = SubtractMean(size=7)
 	lcn = LCN(N=7)
 
-	img = gpuarray.to_gpu(Visual.loadImage("../TestData/Bench.png"))
+	img = gpuarray.to_gpu(loadImage("../TestData/Bench.png"))
 
 	subtractMean(img)
-	Visual.showImage(subtractMean.data.get(), "../TestData/ResultSubtractNorm.png")
+	showImage(subtractMean.data.get(), "../TestData/ResultSubtractNorm.png")
 
 	lcn(img)
-	Visual.showImage(lcn.data.get(), "../TestData/ResultLCN.png")
+	showImage(lcn.data.get(), "../TestData/ResultLCN.png")
 
 
 if __name__ == "__main__":

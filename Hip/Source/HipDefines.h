@@ -78,18 +78,26 @@
 #define cudaMalloc hipMalloc
 #define cudaFree hipFree
 #define cudaMemcpy2D hipMemcpy2D
+#define cudaMemcpy2DAsync hipMemcpy2DAsync
 #define cudaMemcpy3D hipMemcpy3D
+#define cudaMemcpy3DAsync hipMemcpy3DAsync
 #define cudaMemcpy3DParms hipMemcpy3DParms
 #define make_cudaPitchedPtr make_hipPitchedPtr
 #define make_cudaExtent make_hipExtent
 #define make_cudaPos make_hipPos
 
 #define cuMemsetD8 hipMemsetD8
+#define cuMemsetD8Async hipMemsetD8Async
 #define cuMemsetD16 hipMemsetD16
+#define cuMemsetD16Async hipMemsetD16Async
 #define cuMemsetD32 hipMemsetD32
+#define cuMemsetD32Async hipMemsetD32Async
 #define cuMemcpyDtoH hipMemcpyDtoH
+#define cuMemcpyDtoHAsync hipMemcpyDtoHAsync
 #define cuMemcpyHtoD hipMemcpyHtoD
+#define cuMemcpyHtoDAsync hipMemcpyHtoDAsync
 #define cuMemcpyDtoD hipMemcpyDtoD
+#define cuMemcpyDtoDAsync hipMemcpyDtoDAsync
 
 #define cuModuleLoadData hipModuleLoadData
 #define cuModuleUnload hipModuleUnload
@@ -122,6 +130,7 @@
 #define cudaProfilerStop hipProfilerStop
 
 typedef hipError_t cudaError_t;
+typedef hipError_t CUresult;
 typedef hipStream_t cudaStream_t;
 typedef hipEvent_t cudaEvent_t;
 typedef hipIpcMemHandle_t cudaIpcMemHandle_t;

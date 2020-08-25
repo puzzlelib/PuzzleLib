@@ -1,8 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import copy
-
 from PuzzleLib.Handlers.Handler import Handler
 
 
@@ -51,7 +49,7 @@ class Calculator(Handler):
 			state["devData"] = self.parseShapeTree(outBatch, onData=reserveDevData)
 
 		def copyDevData(indata, outdata):
-			copy(outdata[idx * self.batchsize:(idx + 1) * self.batchsize], indata)
+			gpuarray.copy(outdata[idx * self.batchsize:(idx + 1) * self.batchsize], indata)
 
 		self.parseShapeTree(outBatch, copyDevData, state["devData"])
 

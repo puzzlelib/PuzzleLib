@@ -357,14 +357,14 @@ def getDeviceCount():
 	return CudaBackend.Driver.Device.count()
 
 
-def getBackend(deviceIdx, initmode=0):
+def getBackend(deviceIdx=0, initmode=0, logger=None):
 	bnd = backendCache.get(deviceIdx, None)
 
 	if bnd is None:
-		bnd = CudaBackend(deviceIdx, initmode)
+		bnd = CudaBackend(deviceIdx, initmode, logger=logger)
 		backendCache[deviceIdx] = bnd
 
 	else:
-		bnd.updateBackend(initmode)
+		bnd.updateBackend(initmode, logger=logger)
 
 	return bnd

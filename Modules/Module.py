@@ -7,7 +7,7 @@ from h5py import h5p, h5f
 
 from PuzzleLib import Config
 
-from PuzzleLib.Backend import Blas, gpuarray
+from PuzzleLib.Backend import gpuarray, Blas
 from PuzzleLib.Variable import Variable
 
 
@@ -135,11 +135,8 @@ class Module:
 
 	def backward(self, grad, updParamGrads=True, updGrad=True, scale=1.0, momentum=0.0):
 		if not Config.disableDtypeShapeChecks:
-			shape = self.acquireShapesFrom(grad)
-			self.checkGradShape(shape)
-
-			dtype = self.acquireDtypesFrom(grad)
-			self.checkGradType(dtype)
+			self.checkGradShape(self.acquireShapesFrom(grad))
+			self.checkGradType(self.acquireDtypesFrom(grad))
 
 		self.grad = None
 

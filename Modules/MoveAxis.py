@@ -1,8 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray, Memory
-from PuzzleLib.Backend.Utils import dtypesSupported
-
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
@@ -54,7 +52,7 @@ class MoveAxis(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -63,7 +61,7 @@ class MoveAxis(Module):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		moveAxisTest(dtype)
 
 

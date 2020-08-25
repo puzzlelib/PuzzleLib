@@ -1,6 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray, Utils
+from PuzzleLib.Backend import gpuarray
 from PuzzleLib.Modules.Module import ModuleError, Module
 
 
@@ -15,11 +15,11 @@ class Concat(Module):
 
 	def updateData(self, data):
 		self.sections = [d.shape[self.axis] for d in data]
-		self.data = Utils.concatenate(data, axis=self.axis)
+		self.data = gpuarray.concatenate(data, axis=self.axis)
 
 
 	def updateGrad(self, grad):
-		self.grad = Utils.split(grad, self.sections, axis=self.axis)
+		self.grad = gpuarray.split(grad, self.sections, axis=self.axis)
 
 
 	def checkDataShape(self, shapes):
@@ -58,7 +58,7 @@ class Concat(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in Utils.dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)

@@ -1,8 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported
-from PuzzleLib.Backend.Dnn.Basic import softmaxNd, softmaxNdBackward
+from PuzzleLib.Backend.Dnn import softmaxNd, softmaxNdBackward
 
 from PuzzleLib.Modules.Module import ModuleError, Module
 
@@ -40,7 +39,7 @@ class SoftMax(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)

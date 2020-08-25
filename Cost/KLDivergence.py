@@ -1,9 +1,9 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import memoryPool as memPool
 from PuzzleLib.Backend.Kernels.Costs import getAccuracyKernel
-from PuzzleLib.Backend.Dnn.Basic import softmaxNd
+from PuzzleLib.Backend.Dnn import softmaxNd
 
 from PuzzleLib.Cost.Cost import Cost
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from PuzzleLib.Config import libname
+from PuzzleLib import Config
 from PuzzleLib.Backend import gpuarray
 
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -24,22 +24,23 @@ class Reshape(Module):
 
 	def updateData(self, data):
 		self.inshape = data.shape
-		modShape = self.copyAxis(self.shape, self.inshape)
-		self.data = data.reshape(modShape)
+		self.data = data.reshape(self.copyAxis(self.shape, self.inshape))
 
-		if self.showWarnings:
-			if self.data.shape[0] != self.inshape[0]:
-				print("[%s] Warning: %s changed data batch axis size (was given %s, reshaped to %s)" %
-					  (libname, self, data.shape, self.data.shape))
+		if self.showWarnings and self.data.shape[0] != self.inshape[0]:
+			Config.getLogger().info(
+				"Warning: %s changed data batch axis size (was given %s, reshaped to %s)",
+				self, data.shape, self.data.shape
+			)
 
 
 	def updateGrad(self, grad):
 		self.grad = grad.reshape(self.inshape)
 
-		if self.showWarnings:
-			if self.grad.shape[0] != self.inshape[0]:
-				print("[%s] Warning: %s changed grad batch axis size (was given %s, reshaped to %s)" %
-					  (libname, self, grad.shape, self.grad.shape))
+		if self.showWarnings and self.grad.shape[0] != self.inshape[0]:
+			Config.getLogger().info(
+				"Warning: %s changed grad batch axis size (was given %s, reshaped to %s)",
+				self, grad.shape, self.grad.shape
+			)
 
 
 	def copyAxis(self, shape, mask):

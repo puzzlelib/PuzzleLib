@@ -1,4 +1,4 @@
-import math, os, io
+import io, os
 
 import numpy as np
 from PIL import Image
@@ -8,41 +8,37 @@ class VisualError(Exception):
 	pass
 
 
-def loadImage(filename, shape=None, normalize=True, mapsToFront=True):
+def loadImage(filename, shape=None, normalize=True, mapsToFront=True, contiguous=True):
 	img = Image.open(filename)
-	return imageToArray(img, shape, normalize, mapsToFront)
+	return imageToArray(img, shape, normalize, mapsToFront, contiguous)
 
 
-def loadImageFromBytes(bytebuffer, shape=None, normalize=True, mapsToFront=True):
+def loadImageFromBytes(bytebuffer, shape=None, normalize=True, mapsToFront=True, contiguous=True):
 	img = Image.open(io.BytesIO(bytebuffer))
-	return imageToArray(img, shape, normalize, mapsToFront)
+	return imageToArray(img, shape, normalize, mapsToFront, contiguous)
 
 
-def imageToArray(img, shape=None, normalize=True, mapsToFront=True):
-	img = img.resize(shape, Image.ANTIALIAS) if shape is not None else img
-	img = np.array(img, dtype=np.float32 if normalize else np.uint8)
+def imageToArray(img, shape=None, normalize=True, mapsToFront=True, contiguous=True):
+	img = np.array(img.resize(shape, Image.ANTIALIAS) if shape is not None else img, dtype=np.uint8)
 
 	if img.ndim == 3 and img.shape[-1] == 4:
 		img = img[:, :, :3]
 
+	if mapsToFront:
+		img = img[np.newaxis, np.newaxis, ...] if img.ndim == 2 else np.rollaxis(img, 2)[np.newaxis, ...]
+
+	elif img.ndim == 2:
+		img = img[..., np.newaxis]
+
 	if normalize:
+		img = img.astype(np.float32)
+
 		if img.max() > 0.0:
 			img *= 2.0 / img.max()
 
 		img -= 1.0
 
-	if mapsToFront:
-		if img.ndim == 2:
-			img = img.reshape((1, 1, *img.shape))
-
-		else:
-			img = np.rollaxis(img, 2)
-			img = np.ascontiguousarray(img, dtype=img.dtype).reshape(1, *img.shape)
-
-	elif img.ndim == 2:
-		img = img.reshape(*img.shape, 1)
-
-	return img
+	return np.ascontiguousarray(img) if contiguous else img
 
 
 def showImage(img, filename, rollMaps=True):
@@ -58,27 +54,22 @@ def showImage(img, filename, rollMaps=True):
 		normImg = np.copy(img)
 		normalizeImageInplace(normImg)
 
-		if normImg.ndim == 3:
-			if normImg.shape[0] == 1:
-				normImg = normImg.reshape(*normImg.shape[1:])
-
-			elif rollMaps:
-				normImg = np.rollaxis(normImg, 0, 3)
+		if rollMaps and normImg.ndim == 3 and normImg.shape[0] > 1:
+			normImg = np.rollaxis(normImg, 0, 3)
 
 		normImg = imageToInt(normImg)
 
-	Image.fromarray(normImg).save(filename)
+	Image.fromarray(normImg.squeeze()).save(filename)
 
 
 def showImageBatch(batch, filebase, ext="png", rollMaps=True):
 	if batch.ndim != 4:
-		raise VisualError("Imagebatch tensor must be 4d")
+		raise VisualError("Imagebatch tensor must be 4d tensor")
+
+	ext = ext.replace(".", "")
 
 	for i in range(batch.shape[0]):
-		img = batch[i]
-		img = img[0] if img.shape[0] == 1 else img
-
-		showImage(img, "%s-%d.%s" % (filebase, i + 1, ext.replace(".", "")), rollMaps)
+		showImage(batch[i], "%s-%d.%s" % (filebase, i + 1, ext), rollMaps)
 
 
 def showImageBatchInFolder(batch, foldername, basename, ext="png", rollMaps=True):
@@ -88,91 +79,45 @@ def showImageBatchInFolder(batch, foldername, basename, ext="png", rollMaps=True
 	showImageBatch(batch, os.path.join(foldername, basename), ext, rollMaps)
 
 
-def showImageBasedFilters(filters, filename, offset=4, normalize=True, cols=16):
-	outmaps, inmaps, fh, fw = filters.shape
-	if inmaps != 3:
-		raise VisualError("Filter tensor must have 3 inmaps")
-
-	rows = int(math.ceil(outmaps / cols))
-
-	width = cols * fw + (cols + 1) * offset
-	height = rows * fh + (rows + 1) * offset
-
-	image = np.zeros((height, width, 3), dtype=np.uint8)
-
-	hstep = offset + fh
-	wstep = offset + fw
-
-	for r in range(rows):
-		for c in range(cols):
-			if r * cols + c >= outmaps:
-				break
-
-			f = np.copy(filters[r * cols + c])
-
-			if normalize:
-				normalizeImageInplace(f)
-
-			f = np.rollaxis(imageToInt(f), 0, 3)
-			image[offset + r * hstep:offset + r * hstep + fh, offset + c * wstep:offset + c * wstep + fw] = f
-
-	Image.fromarray(image).save(filename)
-
-
 def showFilters(filters, filename, offset=4, normalize=True):
+	outmaps, inmaps, fh, fw = filters.shape
+	showImageBasedFilters(
+		filters.reshape(outmaps * inmaps, 1, fh, fw), filename, cols=inmaps, offset=offset, normalize=normalize
+	)
+
+
+def showImageBasedFilters(filters, filename, cols=16, offset=4, normalize=True):
 	outmaps, inmaps, fh, fw = filters.shape
 
 	if fh == fw == 1:
 		print("Aborting showing 1x1 filters in file %s ..." % filename)
 		return
 
-	width = inmaps * fw + (inmaps + 1) * offset
-	height = outmaps * fh + (outmaps + 1) * offset
+	rows = (outmaps + cols - 1) // cols
 
-	image = np.zeros((height, width), dtype=np.uint8)
+	height = rows * fh + (rows + 1) * offset
+	width = cols * fw + (cols + 1) * offset
 
-	hstep = offset + fh
-	wstep = offset + fw
+	image = np.zeros((height, width, inmaps), dtype=np.uint8)
+	hstep, wstep = offset + fh, offset + fw
 
-	for i in range(outmaps):
-		for j in range(inmaps):
-			f = np.copy(filters[i, j])
+	for index in range(outmaps):
+		r, c = index // cols, index % cols
+		f = filters[index]
 
-			if normalize:
-				normalizeImageInplace(f)
+		if normalize:
+			f = np.copy(f)
+			normalizeImageInplace(f)
 
-			f = imageToInt(f)
-			image[offset + i * hstep:offset + i * hstep + fh, offset + j * wstep:offset + j * wstep + fw] = f
+		f = np.moveaxis(imageToInt(f), 0, 2)
+		image[offset + r * hstep:offset + r * hstep + fh, offset + c * wstep:offset + c * wstep + fw] = f
 
-	Image.fromarray(image).save(filename)
-
-
-def showChanneledFilters(filters, filename, offset=4, normalize=True):
-	outmaps, inmaps, ch, fh, fw = filters.shape
-
-	width = inmaps * fw + (inmaps + 1) * offset
-	height = outmaps * fh + (outmaps + 1) * offset
-
-	image = np.zeros((height, width, ch), dtype=np.uint8)
-
-	hstep = offset + fh
-	wstep = offset + fw
-
-	for i in range(outmaps):
-		for j in range(inmaps):
-			f = np.copy(filters[i, j])
-
-			if normalize:
-				normalizeImageInplace(f)
-
-			f = np.moveaxis(imageToInt(f), 0, 2)
-			image[offset + i * hstep:offset + i * hstep + fh, offset + j * wstep:offset + j * wstep + fw, :] = f
-
-	Image.fromarray(image).save(filename)
+	Image.fromarray(image.squeeze()).save(filename)
 
 
 def normalizeImageInplace(img):
 	img -= img.min()
+
 	if img.max() > 0.0:
 		img /= img.max()
 
@@ -204,14 +149,11 @@ def unittest():
 	filters = np.random.normal(size=(32, 3, 32, 32)).astype(np.float32)
 	showImageBasedFilters(filters, "./TestData/testColorFilters.png")
 
-	filters = np.random.normal(size=(16, 24, 3, 16, 16)).astype(np.float32)
-	showChanneledFilters(filters, "./TestData/testChanneledFilters.png")
-
 	img = np.random.normal(size=(3, 32, 32)).astype(np.float32)
 	showImage(img, "./TestData/testImage.png")
 
 	batch = np.random.normal(size=(4, 1, 16, 16)).astype(np.float32)
-	showImageBatch(batch, "./TestData/testBatch", ".png")
+	showImageBatch(batch, "./TestData/testBatch")
 
 
 if __name__ == "__main__":

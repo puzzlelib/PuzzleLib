@@ -1,30 +1,18 @@
-from PuzzleLib.Datasets import Cifar10Loader
+import numpy as np
 
-from PuzzleLib.Containers import *
-from PuzzleLib.Modules import *
-from PuzzleLib.Handlers import *
-from PuzzleLib.Optimizers import MomentumSGD
+from PuzzleLib.Containers import Sequential
+from PuzzleLib.Modules import Conv2D, Activation, relu, MaxPool2D, Dropout, AvgPool2D, Flatten
+
+from PuzzleLib.Datasets import Cifar10Loader
+from PuzzleLib.Visual import showImageBasedFilters, showFilters
+from PuzzleLib.Optimizers import Hooks, MomentumSGD
+from PuzzleLib.Handlers import Trainer, Validator
 from PuzzleLib.Cost import CrossEntropy
 
-from PuzzleLib.Visual import *
-from PuzzleLib.Optimizers import Hooks
 
-
-def main():
-	cifar10 = Cifar10Loader()
-	data, labels = cifar10.load(path="../TestData/")
-	data, labels = data[:], labels[:]
-	print("Loaded cifar10")
-
-	data = np.array(data).reshape(data.shape[0], np.prod(data.shape[1:]))
-	data -= np.mean(data, axis=0, keepdims=True) + 10**(-8)
-	data /= np.std(data, axis=0, keepdims=True) + 10**(-5)
-
-	data = data.reshape(data.shape[0], 3, 32, 32)
-
-	np.random.seed(1234)
-
+def buildNet():
 	seq = Sequential(name="cifar")
+
 	seq.append(Conv2D(3, 192, 5, pad=2, initscheme="gaussian", wscale=0.05, name="conv1"))
 	seq.append(Activation(relu, name="relu1"))
 
@@ -58,31 +46,52 @@ def main():
 	seq.append(AvgPool2D(8, 1, name="pool3"))
 	seq.append(Flatten())
 
+	return seq
+
+
+def main():
+	cifar10 = Cifar10Loader()
+	data, labels = cifar10.load(path="../TestData/")
+	data, labels = data[:], labels[:]
+	print("Loaded cifar10")
+
+	data = data.reshape(data.shape[0], -1)
+	data -= np.mean(data, axis=0, keepdims=True) + 1e-8
+	data /= np.std(data, axis=0, keepdims=True) + 1e-5
+
+	data = data.reshape(data.shape[0], 3, 32, 32)
+
+	np.random.seed(1234)
+	net = buildNet()
+
 	optimizer = MomentumSGD(learnRate=0.1, momRate=0.9)
 	optimizer.addHook(Hooks.WeightDecay(0.0001))
-	optimizer.setupOn(seq, useGlobalState=True)
+	optimizer.setupOn(net, useGlobalState=True)
 
 	cost = CrossEntropy(maxlabels=10)
-	trainer = Trainer(seq, cost, optimizer,
-					  onBatchFinish=lambda train: print("Processed batch %d out of %d" %
-														(train.currBatch, train.totalBatches)))
+	trainer = Trainer(
+		net, cost, optimizer,
+		onBatchFinish=lambda train: print("Processed batch %d out of %d" % (train.currBatch, train.totalBatches))
+	)
 
-	validator = Validator(seq, cost)
+	validator = Validator(net, cost)
+	epochs = 100
 
-	numofepochs = 100
-	for i in range(numofepochs):
-		trainer.trainFromHost(data[:50000], labels[:50000], macroBatchSize=25000,
-							  onMacroBatchFinish=lambda train: print("Train error: %s" % train.cost.getMeanError()))
+	for i in range(epochs):
+		trainer.trainFromHost(
+			data[:50000], labels[:50000], macroBatchSize=25000,
+			onMacroBatchFinish=lambda train: print("Train error: %s" % train.cost.getMeanError())
+		)
 		valerror = validator.validateFromHost(data[50000:], labels[50000:], macroBatchSize=10000)
-		print("Finished epoch %d out of %d. Val error: %s" % (i+1, numofepochs, valerror))
+		print("Finished epoch %d out of %d. Val error: %s" % (i + 1, epochs, valerror))
 
-		if i+1 == 60 or i+1 == 80:
+		if i + 1 == 60 or i + 1 == 80:
 			optimizer.learnRate *= 0.1
 			print("Lowered learn rate: %s" % optimizer.learnRate)
 
-		showImageBasedFilters(seq["conv1"].W.get(), "../TestData/ninconv1.png")
-		showFilters(seq["conv2"].W.get(), "../TestData/ninconv2.png")
-		showFilters(seq["conv3"].W.get(), "../TestData/ninconv3.png")
+		showImageBasedFilters(net["conv1"].W.get(), "../TestData/ninconv1.png")
+		showFilters(net["conv2"].W.get(), "../TestData/ninconv2.png")
+		showFilters(net["conv3"].W.get(), "../TestData/ninconv3.png")
 
 
 if __name__ == "__main__":

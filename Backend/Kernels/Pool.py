@@ -32,7 +32,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, poolmod = backend.memoryPool, backend.poolmod
 
 	def wrapMaxPool2d(data, size, stride, pad):

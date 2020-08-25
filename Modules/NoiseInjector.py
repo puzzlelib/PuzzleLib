@@ -5,7 +5,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported, fillUniform, fillNormal, copy, globalRng, memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import fillUniform, fillNormal, copy, globalRng, memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import mulKer, addKer
 
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -36,10 +36,10 @@ class NoiseInjector(Module):
 		self.slice = slicing
 
 		self.rands = None
-
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 
 	def updateData(self, data):
@@ -116,7 +116,7 @@ class NoiseInjector(Module):
 
 
 	def calcMode(self, T):
-		dtypes = {dtype for dtype, _ in dtypesSupported()}
+		dtypes = {dtype for dtype, _ in gpuarray.dtypesSupported()}
 
 		if T not in dtypes:
 			raise ModuleError("Unsupported dtype %s" % T)
@@ -125,7 +125,7 @@ class NoiseInjector(Module):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		noiseInjectorTest(dtype)
 
 

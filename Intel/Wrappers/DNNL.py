@@ -1,4 +1,4 @@
-import math, multiprocessing
+import math
 from collections import namedtuple
 from enum import Enum
 
@@ -8,7 +8,7 @@ from PuzzleLib import Config
 
 from PuzzleLib.CPU.CPUArray import CPUArray
 from PuzzleLib.CPU.Wrappers import NumpyBlas
-from PuzzleLib.CPU.Benchmarks.Utils import timeKernel
+from PuzzleLib.CPU.Utils import timeKernel
 
 from PuzzleLib.Intel.ThirdParty import libdnnl
 
@@ -28,14 +28,13 @@ stream = None
 
 def autoinit():
 	global engine
+
 	engine = libdnnl.dnnl_engine_create(EngineKind.cpu.value, Config.deviceIdx)
+	version = libdnnl.dnnl_version()
 
-	if Config.systemLog:
-		version = libdnnl.dnnl_version()
-
-		print("[%s]: Created dnnl engine (Using version: %s.%s.%s)" % (
-			Config.libname, version.major, version.minor, version.patch
-		))
+	Config.getLogger().debug(
+		"Created dnnl engine (Using version: %s.%s.%s)", version.major, version.minor, version.patch
+	)
 
 	global stream
 	stream = libdnnl.dnnl_stream_create(engine, StreamFlags.default.value)
@@ -48,7 +47,7 @@ def autoinit():
 	atexit.register(finishUp)
 
 
-if engine is None and (multiprocessing.current_process().name == "MainProcess" or Config.allowMultiContext):
+if engine is None and Config.shouldInit():
 	autoinit()
 
 
@@ -222,10 +221,12 @@ def getConvNdOutShape(datashape, Wshape, stride, pad, dilation):
 	return (datashape[0], Wshape[0]) + shape
 
 
-def getConvNdInShape(gradshape, Wshape, stride, pad, dilation):
+def getConvNdInShape(gradshape, Wshape, stride, pad, dilation, postpad):
+	postpad = tuple(postpad for _ in range(len(pad))) if isinstance(postpad, int) else postpad
+
 	fsize = Wshape[2:]
 	shape = tuple(
-		stride[d] * (gradshape[d + 2] - 1) - 2 * pad[d] + (dilation[d] + 1) * (fsize[d] - 1) + 1
+		stride[d] * (gradshape[d + 2] - 1) - 2 * pad[d] + (dilation[d] + 1) * (fsize[d] - 1) + 1 + postpad[d]
 		for d in range(len(stride))
 	)
 
@@ -236,7 +237,7 @@ def dilationIsNotTrivial(dilation):
 	return any(dil > 0 for dil in dilation)
 
 
-def convNd(data, W, bias=None, stride=1, pad=0, dilation=1, algo=ConvAlgo.auto, transpose=False):
+def convNd(data, W, bias=None, stride=1, pad=0, dilation=1, postpad=0, algo=ConvAlgo.auto, transpose=False):
 	assert data.ndim == W.ndim
 	assert data.shape[1] == W.shape[1] if not transpose else data.shape[1] == W.shape[0]
 
@@ -250,16 +251,17 @@ def convNd(data, W, bias=None, stride=1, pad=0, dilation=1, algo=ConvAlgo.auto, 
 	dilated = dilationIsNotTrivial(dilation)
 
 	if transpose:
-		getOutShape = getConvNdInShape
+		outshape = getConvNdInShape(data.shape, W.shape, stride, pad, dilation, postpad)
+
 		descInit = libdnnl.dnnl_dilated_deconvolution_forward_desc_init if dilated else \
 			libdnnl.dnnl_deconvolution_forward_desc_init
 		algo = DeconvAlgo.winograd if algo == ConvAlgo.winograd else DeconvAlgo.direct
 	else:
-		getOutShape = getConvNdOutShape
+		outshape = getConvNdOutShape(data.shape, W.shape, stride, pad, dilation)
+
 		descInit = libdnnl.dnnl_dilated_convolution_forward_desc_init if dilated else \
 			libdnnl.dnnl_convolution_forward_desc_init
 
-	outshape = getOutShape(data.shape, W.shape, stride, pad, dilation)
 	dilation = (dilation, ) if dilated else ()
 
 	key = (
@@ -303,7 +305,7 @@ def convNd(data, W, bias=None, stride=1, pad=0, dilation=1, algo=ConvAlgo.auto, 
 	return descOutData.tensor
 
 
-def convNdBackwardData(grad, W, data=None, stride=1, pad=0, dilation=1, algo=ConvAlgo.auto, transpose=False):
+def convNdBackwardData(grad, W, data=None, stride=1, pad=0, dilation=1, postpad=0, algo=ConvAlgo.auto, transpose=False):
 	assert grad.ndim == W.ndim
 	assert grad.shape[1] == W.shape[0] if not transpose else grad.shape[1] == W.shape[1]
 
@@ -314,16 +316,17 @@ def convNdBackwardData(grad, W, data=None, stride=1, pad=0, dilation=1, algo=Con
 	dilated = dilationIsNotTrivial(dilation)
 
 	if transpose:
-		getInShape = getConvNdOutShape
+		inshape = getConvNdOutShape(grad.shape, W.shape, stride, pad, dilation) if data is None else data.shape
+
 		descInit = libdnnl.dnnl_dilated_deconvolution_backward_data_desc_init if dilated else \
 			libdnnl.dnnl_deconvolution_backward_data_desc_init
 		algo = DeconvAlgo.winograd if algo == ConvAlgo.winograd else DeconvAlgo.direct
 	else:
-		getInShape = getConvNdInShape
+		inshape = getConvNdInShape(grad.shape, W.shape, stride, pad, dilation, postpad) if data is None else data.shape
+
 		descInit = libdnnl.dnnl_dilated_convolution_backward_data_desc_init if dilated else \
 			libdnnl.dnnl_convolution_backward_data_desc_init
 
-	inshape = getInShape(grad.shape, W.shape, stride, pad, dilation) if data is None else data.shape
 	dilation = (dilation, ) if dilated else ()
 
 	key = (grad.shape, grad.dtype, W.shape, W.dtype, stride, pad, *dilation, algo, transpose)

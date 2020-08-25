@@ -1,7 +1,7 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported, globalRng, copy, memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import globalRng, copy, memoryPool as memPool
 from PuzzleLib.Backend.Kernels.ElementWise import dropout2dKer
 
 from PuzzleLib.Modules.Dropout import Dropout
@@ -65,7 +65,7 @@ class Dropout2D(Dropout):
 
 
 def unittest():
-	for dtype, _ in dtypesSupported():
+	for dtype, _ in gpuarray.dtypesSupported():
 		dropout2dTest(dtype)
 
 

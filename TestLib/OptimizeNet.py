@@ -1,8 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Benchmarks import timeKernel
-
 from PuzzleLib.Models.Nets.VGG import loadVGG
 
 from PuzzleLib.Optimizers import SGD
@@ -29,12 +27,12 @@ def main():
 	trainer = Trainer(net, cost, optimizer)
 
 	print("Started benchmarking %s ..." % net.name)
-	timeKernel(
+	gpuarray.timeKernel(
 		trainer.train, args=(batch, labels), looplength=100, logname="Before optimizing %s" % net.name, normalize=True
 	)
 
 	net.optimizeForShape(size)
-	timeKernel(
+	gpuarray.timeKernel(
 		trainer.train, args=(batch, labels), looplength=100, logname="After optimizing %s" % net.name, normalize=True
 	)
 

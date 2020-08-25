@@ -142,13 +142,14 @@ class Compiler:
 		sourcefiles = [sourcefiles] if not isinstance(sourcefiles, list) else sourcefiles
 		deps = self.invoke(self.cmdline(self.depLine(sourcefiles)), verbose=self.verbose - 1).decode()
 
+		files = []
+		for line in deps.splitlines():
+			files.extend(self.extractPathsFromLine(line))
+
 		cwd = os.path.normcase(os.path.realpath(cwd))
-		files = (
-			os.path.normcase(os.path.abspath(path)) for path in deps.split() if os.path.exists(path) and len(path) > 1
-		)
 
 		deps = set(file for file in files if os.path.commonprefix([file, cwd]) == cwd)
-		deps.update([os.path.normcase(os.path.realpath(file)) for file in sourcefiles])
+		deps.update(os.path.normcase(os.path.realpath(file)) for file in sourcefiles)
 
 		return deps
 
@@ -193,9 +194,27 @@ class Compiler:
 		return "Linker" if asLinker else "Compiler"
 
 
+	@staticmethod
+	def extractPathsFromLine(line):
+		line = line.split(sep=": ")[-1].strip() if line[0] != " " else line
+
+		paths = (path.strip() for path in line.split())
+		return (os.path.normcase(os.path.abspath(path)) for path in paths if os.path.exists(path))
+
+
+	@staticmethod
+	def normalizeParam(value):
+		if isinstance(value, set):
+			return ",".join(value for value in sorted(value))
+
+		elif isinstance(value, (list, tuple)):
+			return ",".join(value)
+
+		return value
+
+
 	def signature(self):
 		kv = (
-			(key, ",".join(value) if isinstance(value, (list, tuple)) else value) for key, value in
-			((key, getattr(self, key)) for key in sorted(self.keys))
+			(key, self.normalizeParam(value)) for key, value in ((key, getattr(self, key)) for key in sorted(self.keys))
 		)
 		return ";".join("%s:%s" % (key, value) for key, value in kv)

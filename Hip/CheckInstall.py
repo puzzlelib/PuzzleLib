@@ -1,5 +1,5 @@
 import sys
-from PuzzleLib.Cuda.CheckInstall import checkRuntime, checkCompiler, checkPipPackages
+from PuzzleLib.Cuda.CheckInstall import checkInstall, checkRuntime, checkPipPackages
 
 
 hipTestKernel = """
@@ -81,13 +81,15 @@ exit:
 """
 
 
-def checkHipInstall(withPip):
-	checkRuntime(
+def checkHipInstall(withRuntime, withPip):
+	checkInstall(
 		name="HIP", compiler="hipcc",
 		download="https://rocm.github.io/install.html#ubuntu-support---installing-from-a-debian-repository",
 		envpath="HIP_PATH"
 	)
-	checkCompiler(name="HIP", compiler="hipcc", kernel=hipTestKernel, ext=".hip.cpp")
+
+	if withRuntime:
+		checkRuntime(name="HIP", compiler="hipcc", kernel=hipTestKernel, ext=".hip.cpp")
 
 	if withPip:
 		checkPipPackages()
@@ -95,7 +97,7 @@ def checkHipInstall(withPip):
 
 def main():
 	try:
-		checkHipInstall(withPip=True)
+		checkHipInstall(withRuntime=True, withPip=True)
 
 	except RuntimeError as e:
 		print(e)

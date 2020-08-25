@@ -1,7 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
 
 from PuzzleLib.Containers.Sequential import Sequential
 from PuzzleLib.Containers.Parallel import Parallel
@@ -380,7 +379,7 @@ def unittest():
 	bn(data)
 
 	del bn
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 	v3 = loadInceptionV3(None, initscheme="gaussian")
 
@@ -388,7 +387,7 @@ def unittest():
 	v3(data)
 
 	del v3
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

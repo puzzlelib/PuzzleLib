@@ -4,7 +4,6 @@ from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray, Blas
 from PuzzleLib.Backend.Kernels import MatVec
-from PuzzleLib.Backend.Utils import dtypesSupported
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -107,7 +106,7 @@ class Linear(Module):
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
+	for dtype, atol in gpuarray.dtypesSupported():
 		calcTest(dtype, atol)
 		trainTest(dtype)
 

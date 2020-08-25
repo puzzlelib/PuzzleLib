@@ -1,102 +1,54 @@
-from enum import Enum
-
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
+from PuzzleLib.Backend.gpuarray import getDeviceName, memoryPool as memPool
 
 from PuzzleLib.Modules.Module import Module
 from PuzzleLib.Converter.TensorRT import Driver
 
 
-class DataType:
-	float32 = Driver.DataType.float
-	int8 = Driver.DataType.int8
-	float16 = Driver.DataType.half
+class RTDataType:
+	float32 = Driver.RTDataType.float
+	int8 = Driver.RTDataType.int8
+	float16 = Driver.RTDataType.half
 
 
-class RTEngineType(Enum):
-	puzzle = Driver.RTEngineType.puzzle
-	caffe = Driver.RTEngineType.caffe
-	onnx = Driver.RTEngineType.onnx
-
-
-def genEngineName(name, dtype, inshape, outshape):
-	from PuzzleLib.Backend.Utils import backend
-	arch = backend.device.name().replace(" ", "_")
-
-	dtypes = {
-		DataType.float32: "float32",
-		DataType.int8: "int8",
-		DataType.float16: "float16"
+def genEngineName(name, dtype=RTDataType.float32, device=None):
+	dtypeToName = {
+		RTDataType.float32: "float32",
+		RTDataType.int8: "int8",
+		RTDataType.float16: "float16"
 	}
 
-	if not isinstance(inshape, list):
-		inshape = [inshape]
-
-	inshape = ",".join("-".join(str(s) for s in sh) for sh in inshape)
-
-	if not isinstance(outshape, list):
-		outshape = [outshape]
-
-	outshape = ",".join("-".join(str(s) for s in sh) for sh in outshape)
-	fullname = "%s.%s.%s.%s.%s.engine" % (name, dtypes[dtype], inshape, outshape, arch)
-
-	return fullname
-
-
-def parseEngineShape(enginename):
-	subnames = enginename.split(sep=".")
-	inshape, outshape = subnames[-4], subnames[-3]
-
-	inshape = [tuple(int(v) for v in sh.split(sep="-")) for sh in inshape.split(sep=",")]
-	inshape = inshape[0] if len(inshape) == 1 else inshape
-
-	outshape = [tuple(int(v) for v in sh.split(sep="-")) for sh in outshape.split(sep=",")]
-	outshape = outshape[0] if len(outshape) == 1 else outshape
-
-	return inshape, outshape
+	device = getDeviceName().replace(" ", "_") if device is None else device
+	return "%s.%s.%s.engine" % (name, dtypeToName[dtype], device)
 
 
 class RTEngine(Module):
-	def __init__(self, enginepath, enginetype, inshape=None, outshape=None, log=True, name=None):
+	def __init__(self, enginepath, log=True, name=None):
 		super().__init__(name)
 		self.registerBlueprint(locals())
 
-		if inshape is None or outshape is None:
-			parsedInshape, parsedOutshape = parseEngineShape(enginepath)
+		self.engine = Driver.RTEngine(enginepath, log)
 
-			inshape = parsedInshape if inshape is None else inshape
-			outshape = parsedOutshape if outshape is None else outshape
+		inshape = [(self.engine.batchsize, ) + tuple(shape) for shape in self.engine.inshape]
+		outshape = [(self.engine.batchsize, ) + tuple(shape) for shape in self.engine.outshape]
 
-		self.inshape, self.outshape = inshape, outshape
-		self.engine = Driver.RTEngine(enginepath, enginetype.value, log)
+		self.inshape = inshape[0] if len(inshape) == 1 else inshape
+		self.outshape = outshape[0] if len(outshape) == 1 else outshape
 
 
 	def updateData(self, data):
-		if isinstance(data, list):
-			batchsize = data[0].shape[0]
-			bindings = [dat.ptr for dat in data]
+		data = [data] if not isinstance(data, list) else data
+		batchsize = data[0].shape[0]
 
-		else:
-			batchsize = data.shape[0]
-			bindings = [data.ptr]
+		outshape = [self.outshape] if not isinstance(self.outshape, list) else self.outshape
+		outdata = [gpuarray.empty((batchsize, ) + shape[1:], dtype=np.float32, allocator=memPool) for shape in outshape]
 
-		if isinstance(self.outshape, list):
-			self.data = [
-				gpuarray.empty((batchsize, ) + outshape[1:], dtype=np.float32, allocator=memPool)
-				for outshape in self.outshape
-			]
-
-		else:
-			self.data = gpuarray.empty((batchsize, ) + self.outshape[1:], dtype=np.float32, allocator=memPool)
-
-		if isinstance(self.data, list):
-			bindings.extend(data.ptr for data in self.data)
-		else:
-			bindings.append(self.data.ptr)
-
+		bindings = [d.ptr for d in data] + [d.ptr for d in outdata]
 		self.engine.enqueue(batchsize, bindings)
+
+		self.data = outdata if isinstance(self.outshape, list) else outdata[0]
 
 
 	def updateGrad(self, grad):

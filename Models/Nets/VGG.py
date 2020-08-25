@@ -1,8 +1,6 @@
 import numpy as np
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import memoryPool as memPool
-
 from PuzzleLib.Containers.Sequential import Sequential
 
 from PuzzleLib.Modules.Conv2D import Conv2D
@@ -126,19 +124,19 @@ def unittest():
 	vgg11(data)
 
 	del vgg11
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 	vgg16 = loadVGG(None, layers="16", initscheme="gaussian")
 	vgg16(data)
 
 	del vgg16
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 	vgg19 = loadVGG(None, layers="19", initscheme="gaussian")
 	vgg19(data)
 
 	del vgg19
-	memPool.freeHeld()
+	gpuarray.memoryPool.freeHeld()
 
 
 if __name__ == "__main__":

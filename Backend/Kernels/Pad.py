@@ -33,7 +33,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, padmod = backend.memoryPool, backend.padmod
 
 	def wrapReflectPad(data, pad):

@@ -15,10 +15,10 @@ class PRelu(Module):
 		self.registerBlueprint(locals())
 
 		self.sharedMaps = sharedMaps
-
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 		shape = (1, ) if sharedMaps else (maps, )
 		slopes = gpuarray.to_gpu(np.full(shape, 0.25, dtype=np.float32))

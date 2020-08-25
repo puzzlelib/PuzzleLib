@@ -29,29 +29,12 @@ from PuzzleLib.Converter.OpenVINO import Driver
 from PuzzleLib.Converter.OpenVINO.VINOEngine import VINOEngine, genEngineName
 
 
-def buildVINOEngine(net, inshape, savepath, returnEngine=True):
-	outshape = net.dataShapeFrom(inshape)
-
-	inshape = inshape if isinstance(inshape, list) else [inshape]
-	outshape = outshape if isinstance(outshape, list) else [outshape]
-
-	batchsize = inshape[0][0]
-	inshape, outshape = [sh[1:] for sh in inshape], [sh[1:] for sh in outshape]
-
-	engineName = genEngineName(net.name, inshape, outshape)
-
-	xmlpath, binpath = os.path.join(savepath, "%s.xml" % engineName), os.path.join(savepath, "%s.bin" % engineName)
-	convert(net, inshape, xmlpath, binpath)
-
-	if returnEngine:
-		return VINOEngine(batchsize, xmlpath, binpath, inshape, outshape)
-
-
-def convert(net, inshape, xmlpath, binpath):
+def buildVINOEngine(net, inshape, savepath, name=None, returnEngine=True):
+	xmlpath, binpath = genEngineName(os.path.join(savepath, net.name if name is None else name))
 	graph = Driver.createNetwork(net.name)
 
 	inshape = inshape if isinstance(inshape, list) else [inshape]
-	inputs = [graph.addInput("data_%s" % i, shape) for i, shape in enumerate(inshape)]
+	inputs = [graph.addInput("data_%s" % i, shape[1:]) for i, shape in enumerate(inshape)]
 
 	output = convertModule(net, net.name, graph, inputs)
 
@@ -59,6 +42,7 @@ def convert(net, inshape, xmlpath, binpath):
 		graph.markOutput(out, "outdata_%s" % i)
 
 	graph.build(xmlpath, binpath)
+	return VINOEngine((xmlpath, binpath), inshape[0][0]) if returnEngine else None
 
 
 def numpyPtr(ary):

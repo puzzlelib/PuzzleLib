@@ -2,11 +2,11 @@ from enum import Enum
 
 import numpy as np
 
-from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend import Blas
-from PuzzleLib.Backend.Dnn.Rnn import RNNMode as BackendRNNMode, DirectionMode as BackendDirectionMode, createRnn
-from PuzzleLib.Backend.Dnn.Rnn import updateRnnParams, acquireRnnParams, forwardRnn, backwardDataRnn, backwardParamsRnn
-from PuzzleLib.Backend.Utils import split, memoryPool as memPool
+from PuzzleLib.Backend import gpuarray, Blas
+from PuzzleLib.Backend.gpuarray import split, memoryPool as memPool
+from PuzzleLib.Backend.Dnn import RNNMode as BackendRNNMode, DirectionMode as BackendDirectionMode, createRnn
+from PuzzleLib.Backend.Dnn import updateRnnParams, acquireRnnParams, forwardRnn, backwardDataRnn, backwardParamsRnn
+
 from PuzzleLib.Modules.Module import ModuleError, Module
 from PuzzleLib.Variable import Variable
 

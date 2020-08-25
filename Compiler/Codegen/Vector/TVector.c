@@ -16,7 +16,7 @@ void ${NAME}_dealloc($NAME *self)
 }
 
 
-void ${NAME}_resize($NAME *self, size_t capacity)
+void ${NAME}_reserve($NAME *self, size_t capacity)
 {
 	if (self->size < capacity)
 	{
@@ -40,17 +40,30 @@ void ${NAME}_resize($NAME *self, size_t capacity)
 }
 
 
-void ${NAME}_append($NAME *self, $T elem)
+inline static void ${NAME}_ensureIsAppendable($NAME *self)
 {
 	if (self->size == self->capacity)
 	{
 		size_t size = (self->capacity < $MIN_CAPACITY) ? $MIN_CAPACITY : self->capacity * 2;
-		${NAME}_resize(self, size);
+		${NAME}_reserve(self, size);
 	}
+}
+
+
+void ${NAME}_append($NAME *self, $T elem)
+{
+	${NAME}_ensureIsAppendable(self);
 
 	$BORROW(elem);
 	self->ptr[self->size] = elem;
 
+	self->size += 1;
+}
+
+
+void ${NAME}_appendEmpty($NAME *self)
+{
+	${NAME}_ensureIsAppendable(self);
 	self->size += 1;
 }
 

@@ -4,6 +4,9 @@ from PuzzleLib import Config
 addVecToMat = None
 argmax = None
 
+addVecToMatBatch = None
+argmaxBatch = None
+
 
 def autoinit():
 	if not Config.shouldInit():
@@ -30,7 +33,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, matmod = backend.memoryPool, backend.matmod
 
 	def wrapAddVecToMat(vec, mat, axis, out):
@@ -42,6 +45,16 @@ def initGPU(Backend):
 	global addVecToMat, argmax
 	addVecToMat = wrapAddVecToMat
 	argmax = wrapArgmax
+
+	def wrapAddVecToMatBatch(vec, mat, axis, out):
+		return matmod.addVecToMat(vec, mat, axis, out, memoryPool)
+
+	def wrapArgmaxBatch(tensor, axis):
+		return matmod.argmax(tensor, axis, memoryPool)
+
+	global addVecToMatBatch, argmaxBatch
+	addVecToMatBatch = wrapAddVecToMatBatch
+	argmaxBatch = wrapArgmaxBatch
 
 
 def initCPU():
@@ -65,6 +78,15 @@ def initCPU():
 	global addVecToMat, argmax
 	addVecToMat = wrapAddVecToMat
 	argmax = wrapArgmax
+
+	def wrapArgmax(mats, axis):
+		out = np.empty(mats.shape[:axis] + mats.shape[axis + 1:], dtype=np.int32)
+		np.argmax(mats.get(copy=False), axis, out=out)
+
+		return CPUArray(out.shape, out.dtype, data=out, acquire=True)
+
+	global argmaxBatch
+	argmaxBatch = wrapArgmax
 
 
 autoinit()

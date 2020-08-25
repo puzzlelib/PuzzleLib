@@ -8,10 +8,10 @@ from PuzzleLib.Modules.DeconvND import DeconvND
 
 
 class Deconv2D(DeconvND):
-	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, wscale=1.0, useBias=True, name=None,
-				 initscheme=None, empty=False, groups=1):
+	def __init__(self, inmaps, outmaps, size, stride=1, pad=0, dilation=1, postpad=0, wscale=1.0, useBias=True,
+				 name=None, initscheme=None, empty=False, groups=1):
 		super().__init__(
-			2, inmaps, outmaps, size, stride, pad, dilation, wscale, useBias, name, initscheme, empty, groups
+			2, inmaps, outmaps, size, stride, pad, dilation, postpad, wscale, useBias, name, initscheme, empty, groups
 		)
 		self.registerBlueprint(locals())
 
@@ -30,12 +30,14 @@ class Deconv2D(DeconvND):
 		_, outmaps, fh, fw = self.W.shape
 
 		hpad, wpad = self.pad
+		hpostpad, wpostpad = self.postpad
+
 		hdilation, wdilation = self.dilation
 		hstride, wstride = self.stride
 
 		outmaps *= self.groups
-		outh = (inh - 1) * hstride + hdilation * (fh - 1) - 2 * hpad + 1
-		outw = (inw - 1) * wstride + wdilation * (fw - 1) - 2 * wpad + 1
+		outh = (inh - 1) * hstride + hdilation * (fh - 1) - 2 * hpad + 1 + hpostpad
+		outw = (inw - 1) * wstride + wdilation * (fw - 1) - 2 * wpad + 1 + wpostpad
 
 		return batchsize, outmaps, outh, outw
 
@@ -92,22 +94,25 @@ def unittest():
 
 def multiInMapsTest():
 	batchsize, inmaps, h, w = 1, 2, 10, 10
-	outmaps = 1
-	stride = 2
-	size = 4
+	outmaps, stride, size, postpad = 1, 2, 4, 1
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
-	deconv = Deconv2D(inmaps, outmaps, size, stride=2)
+	deconv = Deconv2D(inmaps, outmaps, size, stride=2, postpad=postpad)
 	deconv(data)
 
+	hostW, hostBias = deconv.W.get(), deconv.b.get()
+
 	hostOutData = np.zeros(deconv.data.shape).astype(np.float32)
+	hostSliceData = hostOutData[:, :, :-postpad, :-postpad]
 
 	for k in range(inmaps):
-		for i in range(0, hostOutData.shape[2] - size + 1, stride):
-			for j in range(0, hostOutData.shape[3] - size + 1, stride):
-				hostOutData[0,0,i:size+i,j:size+j] += deconv.W.get()[k,0] * data.get()[0,k,int(i/stride),int(j/stride)]
-		hostOutData[0, 0] += deconv.b.get()[0, 0]
+		for i in range(0, hostSliceData.shape[2] - size + 1, stride):
+			for j in range(0, hostSliceData.shape[3] - size + 1, stride):
+				hostOutData[0, 0, i:size + i, j:size + j] += hostW[k, 0] * hostData[0, k, i // stride, j // stride]
+
+		hostSliceData[0, 0] += hostBias[0, 0]
 
 	assert np.allclose(hostOutData, deconv.data.get())
 
@@ -118,18 +123,21 @@ def multiOutMapsTest():
 	stride = 2
 	size = 4
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	deconv = Deconv2D(inmaps, outmaps, size, stride=stride)
 	deconv(data)
 
+	hostW, hostBias = deconv.W.get(), deconv.b.get()
 	hostOutData = np.zeros(deconv.data.shape).astype(np.float32)
 
 	for k in range(outmaps):
 		for i in range(0, hostOutData.shape[2] - size + 1, stride):
 			for j in range(0, hostOutData.shape[3] - size + 1, stride):
-				hostOutData[0,k,i:size+i,j:size+j] += deconv.W.get()[0,k] * data.get()[0,0,int(i/stride),int(j/stride)]
-		hostOutData[0, k] += deconv.b.get()[0, k]
+				hostOutData[0, k, i:size + i, j:size + j] += hostW[0, k] * hostData[0, 0, i // stride, j //stride]
+
+		hostOutData[0, k] += hostBias[0, k]
 
 	assert np.allclose(hostOutData, deconv.data.get())
 
@@ -138,7 +146,8 @@ def multiMapsWithPadsTest():
 	batchsize, inmaps, h, w = 3, 4, 2, 2
 	outmaps, size, stride, pad, dilation = 4, 3, 2, 1, 2
 
-	data = gpuarray.to_gpu(np.random.randn(batchsize, inmaps, h, w).astype(np.float32))
+	hostData = np.random.randn(batchsize, inmaps, h, w).astype(np.float32)
+	data = gpuarray.to_gpu(hostData)
 
 	deconv = Deconv2D(inmaps, outmaps, size=size, stride=stride, pad=pad, dilation=dilation, initscheme="gaussian")
 	deconv(data)
@@ -146,8 +155,9 @@ def multiMapsWithPadsTest():
 	hostW, hostBias = deconv.W.get(), deconv.b.get()
 	dl = dilation
 
-	hostData, hostOutData = data.get(), np.zeros(deconv.data.shape[:2] + (deconv.data.shape[2] + 2 * pad,
-												deconv.data.shape[3] + 2 * pad), dtype=np.float32)
+	hostOutData = np.zeros(
+		deconv.data.shape[:2] + (deconv.data.shape[2] + 2 * pad, deconv.data.shape[3] + 2 * pad), dtype=np.float32
+	)
 
 	for c in range(outmaps):
 		hostOutData[:, c, :, :] = hostBias[0, c, 0, 0]
@@ -163,11 +173,14 @@ def multiMapsWithPadsTest():
 
 	assert np.allclose(hostOutData[:, :, pad:-pad, pad:-pad], deconv.data.get())
 
-	grad = gpuarray.to_gpu(np.random.randn(*deconv.data.shape).astype(np.float32))
-	deconv.backward(grad)
+	hostGrad = np.random.randn(*deconv.data.shape).astype(np.float32)
+	grad = gpuarray.to_gpu(hostGrad)
 
-	hostGrad = np.zeros(grad.shape[:2] + (grad.shape[2] + 2 * pad, grad.shape[3] + 2 * pad), dtype=np.float32)
-	hostGrad[:, :, pad:-pad, pad:-pad] = grad.get()
+	deconv.backward(grad)
+	hostExtGrad = np.zeros(grad.shape[:2] + (grad.shape[2] + 2 * pad, grad.shape[3] + 2 * pad), dtype=np.float32)
+
+	hostExtGrad[:, :, pad:-pad, pad:-pad] = hostGrad
+	hostGrad = hostExtGrad
 
 	hostInGrad = np.zeros(hostData.shape, dtype=np.float32)
 

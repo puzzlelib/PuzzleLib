@@ -1,7 +1,6 @@
 import sys, time
 import numpy as np
 
-from PuzzleLib import Config
 from PuzzleLib.Cuda.Utils import prod, QueueManager
 
 from PuzzleLib.Cuda.Kernels import ElementWise
@@ -39,7 +38,7 @@ class GPUBackend:
 	RNNAlgo, RNNMode, DirectionMode = None, None, None
 
 
-	def __init__(self, deviceIdx, initmode=0):
+	def __init__(self, deviceIdx, initmode=0, logger=None):
 		self.deviceIdx = deviceIdx
 
 		ndevices = self.Driver.Device.count()
@@ -50,12 +49,12 @@ class GPUBackend:
 			raise self.Error("Invalid %s config device index" % self.BackendName)
 
 		self.device = self.Driver.Device(deviceIdx).set()
-		print("[%s] Using device #%s (%s)" % (Config.libname, deviceIdx, self.device.name()), flush=True)
 
-		if Config.systemLog:
-			print(
-				"[%s] Created %s context (Using driver version: %s)" %
-				(Config.libname, self.BackendName, self.Driver.getDriverVersion()), flush=True
+		if logger is not None:
+			logger.info("Using device #%s (%s)", deviceIdx, self.device.name())
+
+			logger.debug(
+				"Created %s context (Using driver version: %s)", self.BackendName, self.Driver.getDriverVersion()
 			)
 
 		self.memoryPool = self.Driver.MemoryPool()
@@ -63,10 +62,10 @@ class GPUBackend:
 		rngtype, seed = self.Rand.RAND_RNG_PSEUDO_XORWOW, int(np.random.randint(sys.maxsize, dtype=np.intp))
 		self.globalRng = self.Rand.RandomNumberGenerator(type=rngtype, seed=seed)
 
-		if Config.systemLog:
-			print(
-				"[%s] Created %s global rng (type=%s, seed=%s)" %
-				(Config.libname, self.Rand.__name__, self.globalRng.type, hex(self.globalRng.seed)), flush=True
+		if logger is not None:
+			logger.debug(
+				"Created %s global rng (type=%s, seed=%s)",
+				self.Rand.__name__, self.globalRng.type, hex(self.globalRng.seed)
 			)
 
 		self.streamManager = QueueManager(objtype=self.Driver.Stream)
@@ -132,12 +131,12 @@ class GPUBackend:
 		self.castFP32toFP16 = None
 
 		self.initmode = 0
-		self.updateBackend(initmode)
+		self.updateBackend(initmode, logger=logger)
 
 
-	def updateBackend(self, initmode):
+	def updateBackend(self, initmode, logger=None):
 		if initmode > 0 >= self.initmode:
-			self.initLibs()
+			self.initLibs(logger)
 
 		if initmode > 1 >= self.initmode:
 			self.initKernels()
@@ -145,20 +144,16 @@ class GPUBackend:
 		self.initmode = max(initmode, self.initmode)
 
 
-	def initLibs(self):
+	def initLibs(self, logger=None):
 		self.blas = self.Blas.BlasContext().enableTensorOps(True)
-		if Config.systemLog:
-			print(
-				"[%s] Created %s context (Using version: %s)" %
-				(Config.libname, self.Blas.__name__, self.blas.getVersion())
-			)
+
+		if logger is not None:
+			logger.debug("Created %s context (Using version: %s)", self.Blas.__name__, self.blas.getVersion())
 
 		self.dnn = self.Dnn.DnnContext().enableTensorOps(True)
-		if Config.systemLog:
-			print(
-				"[%s] Created %s context (Using version: %s)" %
-				(Config.libname, self.Dnn.__name__, self.dnn.getVersion())
-			)
+
+		if logger is not None:
+			logger.debug("Created %s context (Using version: %s)", self.Dnn.__name__, self.dnn.getVersion())
 
 
 	def initKernels(self):

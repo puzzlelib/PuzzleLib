@@ -10,7 +10,7 @@ from PuzzleLib.Optimizers import MomentumSGD
 from PuzzleLib.Cost import CrossEntropy
 
 from PuzzleLib.Converter.TensorRT.Tests.Common import benchModels
-from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, DataType
+from PuzzleLib.Converter.TensorRT.BuildRTEngine import buildRTEngine, RTDataType
 from PuzzleLib.Converter.TensorRT.DataCalibrator import DataCalibrator
 
 
@@ -71,11 +71,11 @@ def main():
 	net = buildNet()
 	trainNet(net, data, labels, 15)
 
-	calibrator = DataCalibrator(data[:60000])
+	calibrator = DataCalibrator(data[:60000], cachename="../TestData/mnist_calibration_cache.bin")
 	net.evalMode()
 
 	engine = buildRTEngine(
-		net, inshape=data[:1].shape, savepath="../TestData", dtype=DataType.int8, calibrator=calibrator
+		net, inshape=data[:1].shape, savepath="../TestData", dtype=RTDataType.int8, calibrator=calibrator
 	)
 
 	benchModels(net, engine, gpuarray.to_gpu(data[:1]))

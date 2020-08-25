@@ -538,11 +538,11 @@ PyMODINIT_FUNC PyInit_Driver(void)
 		goto error_1;
 
 	if (!Cuda_Device_moduleInit(m))    goto error_2;
-	if (!Cuda_Buffer_moduleInit(m))    goto error_3;
-	if (!Cuda_GPUArray_moduleInit(m))  goto error_4;
-	if (!Cuda_Allocator_moduleInit(m)) goto error_5;
-	if (!Cuda_Module_moduleInit(m))    goto error_6;
-	if (!Cuda_Stream_moduleInit(m))    goto error_7;
+	if (!Cuda_Stream_moduleInit(m))    goto error_3;
+	if (!Cuda_Buffer_moduleInit(m))    goto error_4;
+	if (!Cuda_GPUArray_moduleInit(m))  goto error_5;
+	if (!Cuda_Allocator_moduleInit(m)) goto error_6;
+	if (!Cuda_Module_moduleInit(m))    goto error_7;
 	if (!CuRand_moduleInit(m))         goto error_8;
 	if (!CuBlas_moduleInit(m))         goto error_9;
 
@@ -568,15 +568,15 @@ error_10:
 error_9:
 	CuRand_moduleDealloc();
 error_8:
-	Cuda_Stream_moduleDealloc();
-error_7:
 	Cuda_Module_moduleDealloc();
-error_6:
+error_7:
 	Cuda_Allocator_moduleDealloc();
-error_5:
+error_6:
 	Cuda_GPUArray_moduleDealloc();
-error_4:
+error_5:
 	Cuda_Buffer_moduleDealloc();
+error_4:
+	Cuda_Stream_moduleDealloc();
 error_3:
 	Cuda_Device_moduleDealloc();
 error_2:

@@ -3,7 +3,6 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray
-from PuzzleLib.Backend.Utils import dtypesSupported
 from PuzzleLib.Backend.Kernels.ElementWise import smorms3Ker
 
 from PuzzleLib.Optimizers.Optimizer import Optimizer, trainSimpleTest, trainHardTest
@@ -35,7 +34,7 @@ class SMORMS3(Optimizer):
 
 
 def unittest():
-	for dtype, atol in dtypesSupported():
+	for dtype, atol in gpuarray.dtypesSupported():
 		calcTest(dtype, atol)
 		trainSimpleTest(SMORMS3, dtype, learnRate=1e-2)
 

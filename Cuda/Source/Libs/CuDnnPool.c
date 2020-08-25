@@ -3,7 +3,7 @@
 
 typedef struct CuDnn_PoolParams
 {
-	size_t size[GPUTENSOR_DIM_MAX - 2], stride[GPUTENSOR_DIM_MAX - 2], pad[GPUTENSOR_DIM_MAX - 2];
+	size_t size[GPUTENSOR_MAP_MAX], stride[GPUTENSOR_MAP_MAX], pad[GPUTENSOR_MAP_MAX];
 	size_t ndim;
 }
 CuDnn_PoolParams;
@@ -46,7 +46,7 @@ inline static bool CuDnn_describePool(cudnnPoolingDescriptor_t *desc, CuDnn_Pool
 	CUDNN_CHECK(cudnnCreatePoolingDescriptor(desc), goto error_1);
 
 	assert(CuDnn_isValidDim(params.ndim + 2));
-	int windowDimA[GPUTENSOR_DIM_MAX - 2], paddingA[GPUTENSOR_DIM_MAX - 2], strideA[GPUTENSOR_DIM_MAX - 2];
+	int windowDimA[GPUTENSOR_MAP_MAX], paddingA[GPUTENSOR_MAP_MAX], strideA[GPUTENSOR_MAP_MAX];
 
 	for (size_t i = 0; i < params.ndim; i += 1)
 		windowDimA[i] = (int)params.size[i], paddingA[i] = (int)params.pad[i], strideA[i] = (int)params.stride[i];

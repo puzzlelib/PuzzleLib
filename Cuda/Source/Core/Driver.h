@@ -19,6 +19,29 @@ bool Cuda_Device_moduleInit(PyObject *m);
 void Cuda_Device_moduleDealloc(void);
 
 
+// Stream
+#define CUDA_STREAM_OBJNAME "Stream"
+#define CUDA_EVENT_OBJNAME "Event"
+
+typedef struct Cuda_Stream
+{
+	PyObject_HEAD
+	cudaStream_t stream;
+}
+Cuda_Stream;
+
+typedef struct Cuda_Event
+{
+	PyObject_HEAD
+	cudaEvent_t event;
+}
+Cuda_Event;
+
+extern PyTypeObject *Cuda_Stream_Type, *Cuda_Event_Type;
+bool Cuda_Stream_moduleInit(PyObject *m);
+void Cuda_Stream_moduleDealloc(void);
+
+
 // Buffer
 #define CUDA_BUFFER_OBJNAME "Buffer"
 
@@ -39,6 +62,62 @@ Cuda_Buffer;
 Cuda_Buffer *Cuda_Buffer_new(Cuda_Ptr ptr, size_t size, int device, PyObject *parent);
 Cuda_Buffer *Cuda_Buffer_newFromIPCHandle(cudaIpcMemHandle_t handle, size_t size);
 Cuda_Buffer *Cuda_Buffer_getSlice(Cuda_Buffer *self, size_t start, size_t size);
+
+inline static bool Cuda_Buffer_fillD8(Cuda_Buffer *self, unsigned char uc, size_t size, Cuda_Stream *stream)
+{
+	size = (size == (size_t)-1) ? self->size : size;
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemsetD8((CUdeviceptr)self->ptr, uc, size);
+	else
+		status = cuMemsetD8Async((CUdeviceptr)self->ptr, uc, size, stream->stream);
+
+	CU_CHECK(status, return false);
+	return true;
+}
+
+inline static bool Cuda_Buffer_get(Cuda_Buffer *self, void *ptr, size_t size, Cuda_Stream *stream)
+{
+	size = (size == (size_t)-1) ? self->size : size;
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemcpyDtoH(ptr, (CUdeviceptr)self->ptr, size);
+	else
+		status = cuMemcpyDtoHAsync(ptr, (CUdeviceptr)self->ptr, size, stream->stream);
+
+	CU_CHECK(status, return false);
+	return true;
+}
+
+inline static bool Cuda_Buffer_set(Cuda_Buffer *self, void *ptr, size_t size, Cuda_Stream *stream)
+{
+	size = (size == (size_t)-1) ? self->size : size;
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemcpyHtoD((CUdeviceptr)self->ptr, ptr, size);
+	else
+		status = cuMemcpyHtoDAsync((CUdeviceptr)self->ptr, ptr, size, stream->stream);
+
+	CU_CHECK(status, return false);
+	return true;
+}
+
+inline static bool Cuda_Buffer_copy(Cuda_Buffer *self, Cuda_Buffer *dst, size_t size, Cuda_Stream *stream)
+{
+	size = (size == (size_t)-1) ? self->size : size;
+	CUresult status;
+
+	if (stream == NULL)
+		status = cuMemcpyDtoD((CUdeviceptr)dst->ptr, (CUdeviceptr)self->ptr, size);
+	else
+		status = cuMemcpyDtoDAsync((CUdeviceptr)dst->ptr, (CUdeviceptr)self->ptr, size, stream->stream);
+
+	CU_CHECK(status, return false);
+	return true;
+}
 
 extern PyTypeObject *Cuda_Buffer_Type;
 bool Cuda_Buffer_moduleInit(PyObject *m);
@@ -133,7 +212,7 @@ inline static size_t Cuda_dtypeSize(Cuda_DataType dtype)
 	}
 }
 
-inline static Cuda_DataType Cuda_toDataType(int typenum)
+inline static Cuda_DataType Cuda_numpyToDataType(int typenum)
 {
 	switch (typenum)
 	{
@@ -152,8 +231,23 @@ inline static Cuda_DataType Cuda_toDataType(int typenum)
 	}
 }
 
-inline static void Cuda_fillShapeAsContiguous(size_t *outshape, size_t *outstrides, const size_t *inshape,
-											  size_t ndim, size_t laststride)
+enum
+{
+	GPUARRAY_NDIM_LIMIT = 32
+};
+
+typedef struct Cuda_ArraySpec
+{
+	size_t shape[GPUARRAY_NDIM_LIMIT], strides[GPUARRAY_NDIM_LIMIT];
+	size_t ndim, size;
+
+	Cuda_DataType dtype;
+	bool contiguous;
+}
+Cuda_ArraySpec;
+
+inline static void Cuda_copyShapeAsContiguous(size_t *outshape, size_t *outstrides, const size_t *inshape, size_t ndim,
+											  size_t laststride)
 {
 	size_t lastdim = 1;
 
@@ -164,6 +258,18 @@ inline static void Cuda_fillShapeAsContiguous(size_t *outshape, size_t *outstrid
 
 		lastdim = outshape[i], laststride = outstrides[i];
 	}
+}
+
+inline static void Cuda_ArraySpec_initAsContiguous(Cuda_ArraySpec *self, const size_t *shape, size_t ndim,
+												   Cuda_DataType dtype)
+{
+	Cuda_copyShapeAsContiguous(self->shape, self->strides, shape, ndim, Cuda_dtypeSize(dtype));
+
+	self->ndim = ndim;
+	self->size = self->strides[0] * self->shape[0] / Cuda_dtypeSize(dtype);
+
+	self->dtype = dtype;
+	self->contiguous = true;
 }
 
 #if defined(_MSC_VER)
@@ -192,21 +298,6 @@ Cuda_GPUArray;
 #define CUDA_GPUARRAY_SHAPE(self) ((self)->shapeAndStrides)
 #define CUDA_GPUARRAY_STRIDES(self) ((self)->shapeAndStrides + (self)->ndim)
 #define CUDA_GPUARRAY_NBYTES(self) ((self)->size * Cuda_dtypeSize((self)->dtype))
-
-enum
-{
-	GPUARRAY_NDIM_LIMIT = 32
-};
-
-typedef struct Cuda_ArraySpec
-{
-	size_t shape[GPUARRAY_NDIM_LIMIT], strides[GPUARRAY_NDIM_LIMIT];
-	size_t ndim, size;
-
-	Cuda_DataType dtype;
-	bool contiguous;
-}
-Cuda_ArraySpec;
 
 Cuda_GPUArray *Cuda_GPUArray_newWithAllocator(Cuda_MemoryPool *allocator, Cuda_Buffer *gpudata,
 											  const Cuda_ArraySpec *spec);
@@ -239,29 +330,6 @@ Cuda_Function;
 extern PyTypeObject *Cuda_Module_Type, *Cuda_Function_Type;
 bool Cuda_Module_moduleInit(PyObject *m);
 void Cuda_Module_moduleDealloc(void);
-
-
-// Stream
-#define CUDA_STREAM_OBJNAME "Stream"
-#define CUDA_EVENT_OBJNAME "Event"
-
-typedef struct Cuda_Stream
-{
-	PyObject_HEAD
-	cudaStream_t stream;
-}
-Cuda_Stream;
-
-typedef struct Cuda_Event
-{
-	PyObject_HEAD
-	cudaEvent_t event;
-}
-Cuda_Event;
-
-extern PyTypeObject *Cuda_Stream_Type, *Cuda_Event_Type;
-bool Cuda_Stream_moduleInit(PyObject *m);
-void Cuda_Stream_moduleDealloc(void);
 
 
 // Driver

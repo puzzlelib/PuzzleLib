@@ -3,7 +3,7 @@ import numpy as np
 from PuzzleLib import Config
 
 from PuzzleLib.Backend import gpuarray, Blas
-from PuzzleLib.Backend.Dnn.Basic import BatchNormMode, batchNormNd, batchNormNdBackward
+from PuzzleLib.Backend.Dnn import BatchNormMode, batchNormNd, batchNormNdBackward
 
 from PuzzleLib.Variable import Variable
 from PuzzleLib.Modules.Module import ModuleError, Module
@@ -16,8 +16,9 @@ class BatchNorm(Module):
 		self.registerBlueprint(locals())
 
 		self.inplace = inplace
+
 		if inplace and Config.showWarnings:
-			print("[%s] Warning: %s is using inplace flag" % (Config.libname, self))
+			Config.getLogger().info("Warning: %s is using inplace flag", self)
 
 		self.size = size
 		self.epsilon = epsilon

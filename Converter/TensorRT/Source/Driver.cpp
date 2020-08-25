@@ -19,7 +19,7 @@ namespace py = pybind11;
 #include "Plugins.h"
 
 
-enum class DataType : int
+enum class RTDataType : int
 {
 	float_ = static_cast<int>(nv::DataType::kFLOAT),
 	int8 = static_cast<int>(nv::DataType::kINT8),
@@ -92,6 +92,16 @@ struct Tensor
 		auto dims = m_tensor->getDimensions();
 		return std::vector<int>(dims.d, dims.d + dims.nbDims);
 	}
+
+	void setType(RTDataType dtype)
+	{
+		m_tensor->setType(static_cast<nv::DataType>(dtype));
+	}
+
+	RTDataType getType()
+	{
+		return static_cast<RTDataType>(m_tensor->getType());
+	}
 };
 
 
@@ -103,6 +113,13 @@ struct ConsoleLogger : nv::ILogger
 	ConsoleLogger(bool enabled)
 	{
 		m_enabled = enabled;
+
+		if (enabled)
+		{
+			std::cerr << "[TensorRT] LOGGER: Using version: ";
+			std::cerr << NV_TENSORRT_MAJOR << '.' << NV_TENSORRT_MINOR << '.';
+			std::cerr << NV_TENSORRT_PATCH << '.' << NV_TENSORRT_BUILD << std::endl;
+		}
 	}
 
 
@@ -111,34 +128,42 @@ struct ConsoleLogger : nv::ILogger
 		if (!m_enabled)
 			return;
 
+		std::cerr << "[TensorRT] ";
+
 		switch (severity)
 		{
 			case Severity::kINTERNAL_ERROR:
 			{
-				std::cerr << "[TensorRT] INTERNAL_ERROR: ";
+				std::cerr << "INTERNAL_ERROR: ";
 				break;
 			}
 			case Severity::kERROR:
 			{
-				 std::cerr << "[TensorRT] ERROR: ";
+				 std::cerr << "ERROR: ";
 				 break;
 			}
 			case Severity::kWARNING:
 			{
-				std::cerr << "[TensorRT] WARNING: ";
+				std::cerr << "WARNING: ";
 				break;
 			}
 			case Severity::kINFO:
 			{
-				std::cout << "[TensorRT] INFO: " << msg << std::endl;
-				return;
+				std::cerr << "INFO: ";
+				break;
+			}
+			case Severity::kVERBOSE:
+			{
+				std::cerr << "VERBOSE: ";
+				break;
 			}
 			default:
 			{
-				std::cerr << "[TensorRT] UNKNOWN: ";
+				std::cerr << "UNKNOWN: ";
 				break;
 			}
 		}
+
 		std::cerr << msg << std::endl;
 	}
 };
@@ -146,34 +171,50 @@ struct ConsoleLogger : nv::ILogger
 
 struct ICalibrator : nv::IInt8EntropyCalibrator2
 {
-	ICalibrator() = default;
+	std::string m_cachename, m_cache;
+
+
+	ICalibrator(const std::string &cachename) : m_cachename(cachename) {}
 
 	int getBatchSize() const override
 	{
-		PYBIND11_OVERLOAD_PURE_NAME(int, nv::IInt8EntropyCalibrator2, "getBatchSize", getBatchSize);
+		PYBIND11_OVERLOAD_PURE(int, nv::IInt8EntropyCalibrator2, getBatchSize);
 	}
 
 	bool getBatch(void *bindings[], const char *names[], int nbBindings) override
 	{
 		py::list pybindings, pynames;
-		for (int i = 0; i < nbBindings; i++)
+		for (int i = 0; i < nbBindings; i += 1)
 		{
 			pybindings.append(reinterpret_cast<std::size_t>(&bindings[i]));
 			pynames.append(names[i]);
 		}
 
-		PYBIND11_OVERLOAD_PURE_NAME(bool, nv::IInt8EntropyCalibrator2, "getBatch", getBatch, pybindings, pynames);
+		PYBIND11_OVERLOAD_PURE(bool, nv::IInt8EntropyCalibrator2, getBatch, pybindings, pynames);
 	}
 
-	const void *readCalibrationCache(std::size_t& length) override
+	const void *readCalibrationCache(std::size_t &length) override
 	{
-		length = 0;
-		return nullptr;
+		std::ifstream file(m_cachename, std::ios::binary);
+
+		if (!file.is_open())
+		{
+			length = 0;
+			return nullptr;
+		}
+
+		m_cache = std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+
+		length = m_cache.size();
+		return m_cache.c_str();
 	}
 
-	void writeCalibrationCache(const void *, std::size_t) override
+	void writeCalibrationCache(const void *ptr, std::size_t length) override
 	{
+		std::ofstream file(m_cachename, std::ios::binary);
 
+		if (file.is_open())
+			file.write(reinterpret_cast<const char *>(ptr), length);
 	}
 };
 
@@ -185,29 +226,46 @@ struct TRTInstance
 
 	TRTInstance() : instance(nullptr) {}
 	TRTInstance(T instance) : instance(instance) {}
+	TRTInstance(TRTInstance<T> &other) = delete;
+	TRTInstance(TRTInstance<T> &&other) : instance(other.instance) { other.instance = nullptr; }
 	~TRTInstance() { if (instance != nullptr) instance->destroy(); }
 
 	T get() { return instance; }
 };
 
 
+inline static void setBuilderConfigFlag(nv::IBuilderConfig &config, nv::BuilderFlag bit, bool mode)
+{
+	auto flags = config.getFlags();
+	flags = mode ? (flags | 1U << static_cast<unsigned>(bit)) : (flags & ~(1U << static_cast<unsigned>(bit)));
+
+	config.setFlags(flags);
+}
+
+
 void buildRTEngine(nvinfer1::INetworkDefinition *network, nv::IBuilder *builder, int batchsize, int workspace,
-				   DataType mode, ICalibrator *calibrator, std::string savepath)
+				   RTDataType mode, ICalibrator *calibrator, const std::string &savepath)
 {
 	builder->setMaxBatchSize(batchsize);
-	builder->setMaxWorkspaceSize(workspace);
 
-	if (mode == DataType::int8)
+	auto configPtr = builder->createBuilderConfig();
+	if (configPtr == nullptr)
+		throw std::runtime_error("Failed to create builder config");
+
+	TRTInstance<decltype(configPtr)> config(configPtr);
+	config.get()->setMaxWorkspaceSize(workspace);
+
+	if (mode == RTDataType::int8)
 	{
-		builder->setInt8Mode(true);
-		builder->setInt8Calibrator(calibrator);
+		setBuilderConfigFlag(*config.get(), nv::BuilderFlag::kINT8, true);
+		config.get()->setInt8Calibrator(calibrator);
 	}
-	else if (mode == DataType::half)
+	else if (mode == RTDataType::half)
 	{
-		builder->setFp16Mode(true);
+		setBuilderConfigFlag(*config.get(), nv::BuilderFlag::kFP16, true);
 	}
 
-	auto enginePtr = builder->buildCudaEngine(*network);
+	auto enginePtr = builder->buildEngineWithConfig(*network, *config.get());
 	if (enginePtr == nullptr)
 		throw std::runtime_error("Failed to create engine");
 
@@ -227,8 +285,9 @@ void buildRTEngine(nvinfer1::INetworkDefinition *network, nv::IBuilder *builder,
 }
 
 
-void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int batchsize, py::list outlayers,
-							DataType mode, ICalibrator *calibrator, int workspace, std::string savepath, bool log)
+void buildRTEngineFromCaffe(const std::string &prototxt, const std::string &caffemodel, int batchsize,
+							py::list outlayers, RTDataType mode, ICalibrator *calibrator, int workspace,
+							const std::string &savepath, bool log)
 {
 	ConsoleLogger logger(log);
 
@@ -238,13 +297,13 @@ void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int ba
 
 	TRTInstance<decltype(builderPtr)> builder(builderPtr);
 
-	if (mode == DataType::int8 && !builder.get()->platformHasFastInt8())
-		throw std::invalid_argument("INT8 datatype is not supported on this platform");
+	if (mode == RTDataType::half && !builder.get()->platformHasFastFp16())
+		throw std::invalid_argument("Platform has no fast fp16 support");
 
-	else if (mode == DataType::half && !builder.get()->platformHasFastFp16())
-		throw std::invalid_argument("FP16 datatype is not supported on this platform");
+	else if (mode == RTDataType::int8 && !builder.get()->platformHasFastInt8())
+		throw std::invalid_argument("Platform has no fast int8 support");
 
-	auto networkPtr = builder.get()->createNetwork();
+	auto networkPtr = builder.get()->createNetworkV2(0);
 	if (networkPtr == nullptr)
 		throw std::runtime_error("Failed to create network");
 
@@ -255,9 +314,6 @@ void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int ba
 		throw std::runtime_error("Failed to create caffe parser");
 
 	TRTInstance<decltype(parserPtr)> parser(parserPtr);
-
-	CaffePluginFactory factory;
-	parser.get()->setPluginFactory(&factory);
 
 	auto blobNameToTensor = parser.get()->parse(
 		prototxt.c_str(), caffemodel.c_str(), *network.get(), static_cast<nv::DataType>(mode)
@@ -271,7 +327,7 @@ void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int ba
 		throw std::invalid_argument(msg);
 	}
 
-	for (std::size_t i = 0; i < len(outlayers); i++)
+	for (std::size_t i = 0; i < len(outlayers); i += 1)
 	{
 		std::string outlayer = py::cast<std::string>(outlayers[i]);
 		network.get()->markOutput(*blobNameToTensor->find(outlayer.c_str()));
@@ -281,8 +337,8 @@ void buildRTEngineFromCaffe(std::string prototxt, std::string caffemodel, int ba
 }
 
 
-void buildRTEngineFromOnnx(std::string onnxname, int batchsize, DataType mode, ICalibrator *calibrator, int workspace,
-						   std::string savepath, bool log)
+void buildRTEngineFromOnnx(const std::string &onnxname, int batchsize, RTDataType mode, ICalibrator *calibrator,
+						   int workspace, const std::string &savepath, bool log)
 {
 	ConsoleLogger logger(log);
 
@@ -292,13 +348,13 @@ void buildRTEngineFromOnnx(std::string onnxname, int batchsize, DataType mode, I
 
 	TRTInstance<decltype(builderPtr)> builder(builderPtr);
 
-	if (mode == DataType::int8 && !builder.get()->platformHasFastInt8())
-		throw std::invalid_argument("INT8 datatype is not supported on this platform");
+	if (mode == RTDataType::half && !builder.get()->platformHasFastFp16())
+		throw std::invalid_argument("Platform has no fast fp16 support");
 
-	else if (mode == DataType::half && !builder.get()->platformHasFastFp16())
-		throw std::invalid_argument("FP16 datatype is not supported on this platform");
+	else if (mode == RTDataType::int8 && !builder.get()->platformHasFastInt8())
+		throw std::invalid_argument("Platform has no fast int8 support");
 
-	auto networkPtr = builder.get()->createNetwork();
+	auto networkPtr = builder.get()->createNetworkV2(0);
 	if (networkPtr == nullptr)
 		throw std::runtime_error("Failed to create network");
 
@@ -325,11 +381,11 @@ void buildRTEngineFromOnnx(std::string onnxname, int batchsize, DataType mode, I
 struct Graph
 {
 	ConsoleLogger m_logger;
+	std::vector<TRTInstance<nv::IPluginV2 *>> m_plugins;
 
 	TRTInstance<nv::IBuilder *> m_builder;
+	TRTInstance<nv::IBuilderConfig *> m_config;
 	TRTInstance<nv::INetworkDefinition *> m_graph;
-
-	PluginFactory m_pluginFactory;
 
 
 	Graph(bool log) : m_logger(log)
@@ -340,7 +396,13 @@ struct Graph
 
 		m_builder.instance = builderPtr;
 
-		auto graphPtr = m_builder.get()->createNetwork();
+		auto configPtr = m_builder.get()->createBuilderConfig();
+		if (configPtr == nullptr)
+			throw std::runtime_error("Failed to create builder config");
+
+		m_config.instance = configPtr;
+
+		auto graphPtr = m_builder.get()->createNetworkV2(0);
 		if (graphPtr == nullptr)
 			throw std::runtime_error("Failed to create graph");
 
@@ -354,7 +416,7 @@ struct Graph
 
 	void setFp16Mode(bool mode)
 	{
-		m_builder.get()->setFp16Mode(mode);
+		setBuilderConfigFlag(*m_config.get(), nv::BuilderFlag::kFP16, mode);
 	}
 
 	bool platformHasFastInt8()
@@ -364,12 +426,12 @@ struct Graph
 
 	void setInt8Mode(bool mode)
 	{
-		m_builder.get()->setInt8Mode(mode);
+		setBuilderConfigFlag(*m_config.get(), nv::BuilderFlag::kINT8, mode);
 	}
 
 	void setInt8Calibrator(ICalibrator *calibrator)
 	{
-		m_builder.get()->setInt8Calibrator(calibrator);
+		m_config.get()->setInt8Calibrator(calibrator);
 	}
 
 	void markOutput(Tensor tensor)
@@ -384,12 +446,12 @@ struct Graph
 
 	void setMaxWorkspaceSize(std::size_t size)
 	{
-		m_builder.get()->setMaxWorkspaceSize(size);
+		m_config.get()->setMaxWorkspaceSize(size);
 	}
 
-	void buildCudaEngine(const char *savepath)
+	void buildCudaEngine(const std::string &savepath)
 	{
-		auto enginePtr = m_builder.get()->buildCudaEngine(*m_graph.get());
+		auto enginePtr = m_builder.get()->buildEngineWithConfig(*m_graph.get(), *m_config.get());
 		if (enginePtr == nullptr)
 			throw std::runtime_error("Failed to create engine");
 
@@ -403,21 +465,18 @@ struct Graph
 
 		std::ofstream file(savepath, std::ios::binary);
 		if (!file.is_open())
-			throw std::invalid_argument("Invalid engine save path: " + std::string(savepath));
+			throw std::invalid_argument("Invalid engine save path: " + savepath);
 
 		file.write(reinterpret_cast<char *>(stream.get()->data()), stream.get()->size());
 	}
 
-	Tensor addInput(const char *name, DataType dtype, py::tuple shape)
+	Tensor addInput(const char *name, RTDataType dtype, py::tuple shape)
 	{
 		nv::Dims dims;
 		dims.nbDims = static_cast<int>(py::len(shape));
 
-		for (int i = 0; i < dims.nbDims; i++)
-		{
-			dims.type[i] = (i == 0) ? nv::DimensionType::kCHANNEL : nv::DimensionType::kSPATIAL;
+		for (int i = 0; i < dims.nbDims; i += 1)
 			dims.d[i] = py::cast<int>(shape[i]);
-		}
 
 		Tensor tensor = {m_graph.get()->addInput(name, static_cast<nv::DataType>(dtype), dims)};
 		return tensor;
@@ -425,7 +484,7 @@ struct Graph
 
 	Tensor addConvolution(Tensor input, int outmaps, py::tuple kernel, std::size_t Wdata, int64_t Wlen,
 						  std::size_t biasdata, int64_t biaslen, py::tuple stride, py::tuple pad, py::tuple pydilation,
-						  bool isDeconvolution, const char *name)
+						  py::tuple postpad, bool isDeconvolution, const char *name)
 	{
 		auto kernelSize = nv::DimsHW(py::cast<int>(kernel[0]), py::cast<int>(kernel[1]));
 		nv::Weights W = {nv::DataType::kFLOAT, reinterpret_cast<void *>(Wdata), Wlen};
@@ -450,24 +509,34 @@ struct Graph
 		nv::ILayer *layer = nullptr;
 		if (isDeconvolution)
 		{
-			auto deconv = m_graph.get()->addDeconvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
+			auto deconv = m_graph.get()->addDeconvolutionNd(*input.m_tensor, outmaps, kernelSize, W, bias);
 			deconv->setName(name);
 
-			deconv->setStride(striding);
-			deconv->setPadding(padding);
+			deconv->setStrideNd(striding);
+			deconv->setPaddingNd(padding);
 
-			layer = deconv;
+			auto postpadding = nv::DimsHW(py::cast<int>(postpad[0]), py::cast<int>(postpad[1]));
+
+			if (postpadding.d[0] > 0 || postpadding.d[1] > 0)
+			{
+				auto prepadding = nv::DimsHW(0, 0);
+				auto padlayer = m_graph.get()->addPaddingNd(*deconv->getOutput(0), prepadding, postpadding);
+
+				layer = padlayer;
+			}
+			else
+				layer = deconv;
 		}
 		else
 		{
-			auto conv = m_graph.get()->addConvolution(*input.m_tensor, outmaps, kernelSize, W, bias);
+			auto conv = m_graph.get()->addConvolutionNd(*input.m_tensor, outmaps, kernelSize, W, bias);
 			conv->setName(name);
 
-			conv->setStride(striding);
-			conv->setPadding(padding);
+			conv->setStrideNd(striding);
+			conv->setPaddingNd(padding);
 
 			auto dilation = nv::DimsHW(py::cast<int>(pydilation[0]), py::cast<int>(pydilation[1]));
-			conv->setDilation(dilation);
+			conv->setDilationNd(dilation);
 
 			layer = conv;
 		}
@@ -506,16 +575,16 @@ struct Graph
 	{
 		auto kernelSize = nv::DimsHW(py::cast<int>(kernel[0]), py::cast<int>(kernel[1]));
 
-		auto pool = m_graph.get()->addPooling(
+		auto pool = m_graph.get()->addPoolingNd(
 			*input.m_tensor, avg ? nv::PoolingType::kAVERAGE : nv::PoolingType::kMAX, kernelSize
 		);
 		pool->setName(name);
 
 		auto striding = nv::DimsHW(py::cast<int>(stride[0]), py::cast<int>(stride[1]));
-		pool->setStride(striding);
+		pool->setStrideNd(striding);
 
 		auto padding = nv::DimsHW(py::cast<int>(pad[0]), py::cast<int>(pad[1]));
-		pool->setPadding(padding);
+		pool->setPaddingNd(padding);
 
 		Tensor tensor = {pool->getOutput(0)};
 		return tensor;
@@ -543,7 +612,7 @@ struct Graph
 	{
 		std::vector<nv::ITensor *> tensors(py::len(inputs));
 
-		for (std::size_t i = 0; i < py::len(inputs); i++)
+		for (std::size_t i = 0; i < py::len(inputs); i += 1)
 		{
 			Tensor tensor = py::cast<Tensor>(inputs[i]);
 			tensors[i] = tensor.m_tensor;
@@ -563,11 +632,11 @@ struct Graph
 
 		auto indims = input.m_tensor->getDimensions();
 
-		nv::Dims outdims = {};
+		nv::Dims outdims;
 		outdims.nbDims = 1;
 		outdims.d[0] = 1;
 
-		for (int i = 0; i < indims.nbDims; i++)
+		for (int i = 0; i < indims.nbDims; i += 1)
 			outdims.d[0] *= indims.d[i];
 
 		flatten->setReshapeDimensions(outdims);
@@ -598,11 +667,7 @@ struct Graph
 		auto indims = input.m_tensor->getDimensions();
 		auto inReshape = m_graph.get()->addShuffle(*input.m_tensor);
 
-		nv::Dims inReshapeDims;
-		inReshapeDims.nbDims = 3;
-		inReshapeDims.d[0] = indims.d[0];
-		inReshapeDims.d[1] = inReshapeDims.d[2] = 1;
-
+		auto inReshapeDims = nv::Dims3(indims.d[0], 1, 1);
 		inReshape->setReshapeDimensions(inReshapeDims);
 
 		auto linear = m_graph.get()->addFullyConnected(*inReshape->getOutput(0), outputs, W, bias);
@@ -635,7 +700,7 @@ struct Graph
 		swapaxes->setName(name);
 
 		nv::Permutation permutation;
-		for (int i = 0; i < nv::Dims::MAX_DIMS; i++)
+		for (int i = 0; i < nv::Dims::MAX_DIMS; i += 1)
 			permutation.order[i] = i;
 
 		permutation.order[axis1] = axis2;
@@ -653,7 +718,7 @@ struct Graph
 		moveaxis->setName(name);
 
 		nv::Permutation permutation;
-		for (int i = 0; i < nv::Dims::MAX_DIMS; i++)
+		for (int i = 0; i < nv::Dims::MAX_DIMS; i += 1)
 		{
 			int order = 0;
 
@@ -683,7 +748,7 @@ struct Graph
 		auto inshape = input.getShape();
 		int offset = 0;
 
-		for (std::size_t i = 0; i < sections.size(); i++)
+		for (std::size_t i = 0; i < sections.size(); i += 1)
 		{
 			nv::Dims start, size, stride;
 
@@ -691,16 +756,16 @@ struct Graph
 			start.d[0] = offset;
 			offset += sections[i];
 
-			for (std::size_t d = 0; d < inshape.size() - 1; d++)
+			for (std::size_t d = 0; d < inshape.size() - 1; d += 1)
 				start.d[d + 1] = 0;
 
 			size.nbDims = static_cast<int>(inshape.size());
 			size.d[0] = sections[i];
-			for (std::size_t d = 0; d < inshape.size() - 1; d++)
+			for (std::size_t d = 0; d < inshape.size() - 1; d += 1)
 				size.d[1 + d] = inshape[1 + d];
 
 			stride.nbDims = static_cast<int>(inshape.size());
-			for (std::size_t d = 0; d < inshape.size(); d++)
+			for (std::size_t d = 0; d < inshape.size(); d += 1)
 				stride.d[d] = 1;
 
 			auto slice = m_graph.get()->addSlice(*input.m_tensor, start, size, stride);
@@ -723,11 +788,8 @@ struct Graph
 		nv::Dims dims;
 		dims.nbDims = static_cast<int>(py::len(shape));
 
-		for (int i = 0; i < dims.nbDims; i++)
-		{
-			dims.type[i] = (i == 0) ? nv::DimensionType::kCHANNEL : nv::DimensionType::kSPATIAL;
+		for (int i = 0; i < dims.nbDims; i += 1)
 			dims.d[i] = py::cast<int>(shape[i]);
-		}
 
 		reshape->setReshapeDimensions(dims);
 
@@ -738,25 +800,19 @@ struct Graph
 	Tensor addGroupLinear(Tensor input, int groups, int insize, int outsize, std::size_t Wdata, int64_t Wlen,
 						  std::size_t biasdata, int64_t biaslen, const char *name)
 	{
-		nv::Dims dims;
-		dims.nbDims = 2;
-
-		dims.d[0] = insize;
-		dims.d[1] = outsize;
+		auto dims = nv::Dims2(insize, outsize);
 
 		nv::Weights W = {nv::DataType::kFLOAT, reinterpret_cast<void *>(Wdata), Wlen};
 		auto weights = m_graph.get()->addConstant(dims, W);
 
-		nv::ILayer *linear = m_graph.get()->addMatrixMultiply(*input.m_tensor, false, *weights->getOutput(0), false);
+		nv::ILayer *linear = m_graph.get()->addMatrixMultiply(
+			*input.m_tensor, nv::MatrixOperation::kNONE, *weights->getOutput(0), nv::MatrixOperation::kNONE
+		);
 		linear->setName(name);
 
 		if (biasdata != 0)
 		{
-			nv::Dims biasDims;
-			biasDims.nbDims = 2;
-
-			biasDims.d[0] = groups;
-			biasDims.d[1] = outsize;
+			auto biasDims = nv::Dims2(groups, outsize);
 
 			nv::Weights b = {nv::DataType::kFLOAT, reinterpret_cast<void *>(biasdata), biaslen};
 			auto bias = m_graph.get()->addConstant(biasDims, b);
@@ -780,13 +836,14 @@ struct Graph
 	}
 
 	void updateRNNParams(nv::IRNNv2Layer *rnn, int layers,
-						 const std::vector<std::size_t>& Wdata, const std::vector<int64_t>& Wlen,
-						 const std::vector<std::size_t>& biasdata, const std::vector<int64_t>& biaslen)
+						 const std::vector<std::size_t> &Wdata, const std::vector<int64_t> &Wlen,
+						 const std::vector<std::size_t> &biasdata, const std::vector<int64_t> &biaslen)
 	{
-		for (int layer = 0; layer < layers; layer++)
+		const int keys = 2;
+
+		for (int layer = 0; layer < layers; layer += 1)
 		{
-			int keys = 2;
-			for (int k = 0; k < keys; k++)
+			for (int k = 0; k < keys; k += 1)
 			{
 				int idx = keys * layer + k;
 				nv::Weights weights;
@@ -801,13 +858,14 @@ struct Graph
 	}
 
 	void updateLSTMParams(nv::IRNNv2Layer *rnn, int layers,
-						  const std::vector<std::size_t>& Wdata, const std::vector<int64_t>& Wlen,
-						  const std::vector<std::size_t>& biasdata, const std::vector<int64_t>& biaslen)
+						  const std::vector<std::size_t> &Wdata, const std::vector<int64_t> &Wlen,
+						  const std::vector<std::size_t> &biasdata, const std::vector<int64_t> &biaslen)
 	{
-		for (int layer = 0; layer < layers; layer++)
+		const int keys = 8;
+
+		for (int layer = 0; layer < layers; layer += 1)
 		{
-			int keys = 8;
-			for (int k = 0; k < keys; k++)
+			for (int k = 0; k < keys; k += 1)
 			{
 				int idx = keys * layer + k;
 				nv::Weights weights;
@@ -832,13 +890,14 @@ struct Graph
 	}
 
 	void updateGRUParams(nv::IRNNv2Layer *rnn, int layers,
-						 const std::vector<std::size_t>& Wdata, const std::vector<int64_t>& Wlen,
-						 const std::vector<std::size_t>& biasdata, const std::vector<int64_t>& biaslen)
+						 const std::vector<std::size_t> &Wdata, const std::vector<int64_t> &Wlen,
+						 const std::vector<std::size_t> &biasdata, const std::vector<int64_t> &biaslen)
 	{
-		for (int layer = 0; layer < layers; layer++)
+		const int keys = 6;
+
+		for (int layer = 0; layer < layers; layer += 1)
 		{
-			int keys = 6;
-			for (int k = 0; k < keys; k++)
+			for (int k = 0; k < keys; k += 1)
 			{
 				int idx = keys * layer + k;
 				nv::Weights weights;
@@ -912,13 +971,18 @@ struct Graph
 		return tensor;
 	}
 
-	Tensor addPRelu(Tensor input, std::size_t slopedata, int64_t slopelen, const char *name)
+	Tensor addPRelu(Tensor input, std::size_t slopedata, int slopelen, const char *name)
 	{
-		auto plugin = m_pluginFactory.createPRelu(reinterpret_cast<float *>(slopedata), slopelen);
-		auto prelu = m_graph.get()->addPluginExt(&input.m_tensor, 1, *plugin);
+		auto dims = input.m_tensor->getDimensions();
 
-		auto internalName = name + PluginFactory::prelu;
-		prelu->setName(internalName.c_str());
+		for (int i = 1; i < dims.nbDims; i += 1)
+			dims.d[i] = 1;
+
+		nv::Weights s = {nv::DataType::kFLOAT, reinterpret_cast<void *>(slopedata), slopelen};
+		auto slope = m_graph.get()->addConstant(dims, s);
+
+		auto prelu = m_graph.get()->addParametricReLU(*input.m_tensor, *slope->getOutput(0));
+		prelu->setName(name);
 
 		Tensor tensor = {prelu->getOutput(0)};
 		return tensor;
@@ -926,15 +990,50 @@ struct Graph
 
 	Tensor addReflectPad(Tensor input, py::tuple pad, const char *name)
 	{
-		int lpad = pad[0].cast<int>(), rpad = pad[1].cast<int>();
+		auto creator = getPluginRegistry()->getPluginCreator(
+			PuzzlePluginCreator::reflectPad1DName, PuzzlePluginCreator::version
+		);
 
-		auto plugin = m_pluginFactory.createReflectPad1D(lpad, rpad);
-		auto reflectpad = m_graph.get()->addPluginExt(&input.m_tensor, 1, *plugin);
+		auto padding = nv::Dims2(py::cast<int>(pad[0]), py::cast<int>(pad[1]));
 
-		auto internalName = name + PluginFactory::reflectpad;
-		reflectpad->setName(internalName.c_str());
+		nv::PluginField padfield = {"pad", reinterpret_cast<const void *>(&padding), nv::PluginFieldType::kDIMS, 1};
+		nv::PluginFieldCollection fc = {1, &padfield};
 
+		auto pluginPtr = creator->createPlugin(name, &fc);
+		TRTInstance<decltype(pluginPtr)> plugin(pluginPtr);
+
+		auto reflectpad = m_graph.get()->addPluginV2(&input.m_tensor, 1, *plugin.get());
+		reflectpad->setName(name);
+
+		m_plugins.push_back(std::move(plugin));
 		Tensor tensor = {reflectpad->getOutput(0)};
+
+		return tensor;
+	}
+
+	Tensor addInstanceNorm(Tensor input, std::size_t scaledata, std::size_t biasdata, int32_t length, float epsilon,
+						   const char *name)
+	{
+		auto creator = getPluginRegistry()->getPluginCreator(
+			PuzzlePluginCreator::instNorm2DName, PuzzlePluginCreator::version
+		);
+
+		nv::PluginField fields[] = {
+			{"scale", reinterpret_cast<const void *>(scaledata), nv::PluginFieldType::kFLOAT32, length},
+			{"bias", reinterpret_cast<const void *>(biasdata), nv::PluginFieldType::kFLOAT32, length},
+			{"epsilon", reinterpret_cast<const void *>(&epsilon), nv::PluginFieldType::kFLOAT32, 1}
+		};
+		nv::PluginFieldCollection fc = {3, fields};
+
+		auto pluginPtr = creator->createPlugin(name, &fc);
+		TRTInstance<decltype(pluginPtr)> plugin(pluginPtr);
+
+		auto instnorm = m_graph.get()->addPluginV2(&input.m_tensor, 1, *plugin.get());
+		instnorm->setName(name);
+
+		m_plugins.push_back(std::move(plugin));
+		Tensor tensor = {instnorm->getOutput(0)};
+
 		return tensor;
 	}
 };
@@ -946,14 +1045,6 @@ Graph *createNetwork(bool log)
 }
 
 
-enum class RTEngineType : int
-{
-	puzzle = 0,
-	caffe = 1,
-	onnx = 2
-};
-
-
 struct RTEngine
 {
 	ConsoleLogger m_logger;
@@ -962,38 +1053,22 @@ struct RTEngine
 	TRTInstance<nv::ICudaEngine *> m_engine;
 	TRTInstance<nv::IExecutionContext *> m_context;
 
-	std::unique_ptr<IPluginFactory> m_pluginFactory;
 
-
-	RTEngine(const std::string& path, RTEngineType enginetype, bool log) : m_logger(log)
+	RTEngine(const std::string &path, bool log) : m_logger(log)
 	{
-		std::ifstream file(path, std::ios::binary);
-		if (!file.is_open())
-			throw std::invalid_argument("Invalid engine path: " + path);
-
-		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
 		auto inferPtr = nv::createInferRuntime(m_logger);
 		if (inferPtr == nullptr)
 			throw std::runtime_error("Failed creating inference runtime");
 
 		m_infer.instance = inferPtr;
 
-		switch (enginetype)
-		{
-			case RTEngineType::puzzle:
-				m_pluginFactory = std::make_unique<PluginFactory>();
-				break;
+		std::ifstream file(path, std::ios::binary);
+		if (!file.is_open())
+			throw std::invalid_argument("Invalid engine path: " + path);
 
-			case RTEngineType::caffe:
-				m_pluginFactory = std::make_unique<CaffePluginFactory>();
-				break;
+		std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
-			case RTEngineType::onnx:
-				break;
-		}
-
-		auto enginePtr = m_infer.get()->deserializeCudaEngine(&content[0], content.length(), m_pluginFactory.get());
+		auto enginePtr = m_infer.get()->deserializeCudaEngine(&content[0], content.length(), nullptr);
 		if (enginePtr == nullptr)
 			throw std::runtime_error("Failed creating engine");
 
@@ -1006,11 +1081,50 @@ struct RTEngine
 		m_context.instance = contextPtr;
 	}
 
+	int getBatchSize()
+	{
+		return m_engine.get()->getMaxBatchSize();
+	}
+
+	std::vector<std::vector<int>> getInshape()
+	{
+		int nbindings = m_engine.get()->getNbBindings();
+		std::vector<std::vector<int>> inshape;
+
+		for (int i = 0; i < nbindings; i += 1)
+		{
+			if (!m_engine.get()->bindingIsInput(i))
+				continue;
+
+			auto dims = m_engine.get()->getBindingDimensions(i);
+			inshape.push_back(std::vector<int>(dims.d, dims.d + dims.nbDims));
+		}
+
+		return inshape;
+	}
+
+	std::vector<std::vector<int>> getOutshape()
+	{
+		int nbindings = m_engine.get()->getNbBindings();
+		std::vector<std::vector<int>> outshape;
+
+		for (int i = 0; i < nbindings; i += 1)
+		{
+			if (m_engine.get()->bindingIsInput(i))
+				continue;
+
+			auto dims = m_engine.get()->getBindingDimensions(i);
+			outshape.push_back(std::vector<int>(dims.d, dims.d + dims.nbDims));
+		}
+
+		return outshape;
+	}
+
 	void enqueue(int batchSize, py::list bindings)
 	{
 		std::vector<void *> buffers;
 
-		for (size_t i = 0; i < len(bindings); i++)
+		for (size_t i = 0; i < len(bindings); i += 1)
 		{
 			size_t binding = py::cast<size_t>(bindings[i]);
 			buffers.push_back(reinterpret_cast<void *>(binding));
@@ -1025,15 +1139,15 @@ PYBIND11_MODULE(Driver, m)
 {
 	py::class_<nv::IInt8EntropyCalibrator2, ICalibrator,
 		std::unique_ptr<nv::IInt8EntropyCalibrator2, py::nodelete>>(m, "ICalibrator")
-		.def(py::init<>());
+		.def(py::init<const std::string &>());
 
 	m.def("buildRTEngineFromCaffe", &buildRTEngineFromCaffe);
 	m.def("buildRTEngineFromOnnx", &buildRTEngineFromOnnx);
 
-	py::enum_<DataType>(m, "DataType")
-		.value("float", DataType::float_)
-		.value("int8", DataType::int8)
-		.value("half", DataType::half);
+	py::enum_<RTDataType>(m, "RTDataType")
+		.value("float", RTDataType::float_)
+		.value("int8", RTDataType::int8)
+		.value("half", RTDataType::half);
 
 	py::enum_<ActivationType>(m, "ActivationType")
 		.value("relu", ActivationType::relu)
@@ -1068,7 +1182,9 @@ PYBIND11_MODULE(Driver, m)
 	py::class_<Tensor>(m, "Tensor")
 		.def_property_readonly("name", &Tensor::getName)
 		.def_property_readonly("shape", &Tensor::getShape)
-		.def("setName", &Tensor::setName);
+		.def_property_readonly("dtype", &Tensor::getType)
+		.def("setName", &Tensor::setName)
+		.def("setType", &Tensor::setType);
 
 	py::class_<Graph>(m, "Graph")
 		.def("platformHasFastFp16", &Graph::platformHasFastFp16)
@@ -1102,16 +1218,15 @@ PYBIND11_MODULE(Driver, m)
 		.def("addRNN", &Graph::addRNN)
 		.def("addUpsample", &Graph::addUpsample)
 		.def("addPRelu", &Graph::addPRelu)
-		.def("addReflectPad", &Graph::addReflectPad);
+		.def("addReflectPad", &Graph::addReflectPad)
+		.def("addInstanceNorm", &Graph::addInstanceNorm);
 
 	m.def("createNetwork", &createNetwork, py::return_value_policy::take_ownership);
 
-	py::enum_<RTEngineType>(m, "RTEngineType")
-		.value("puzzle", RTEngineType::puzzle)
-		.value("caffe", RTEngineType::caffe)
-		.value("onnx", RTEngineType::onnx);
-
 	py::class_<RTEngine>(m, "RTEngine")
-		.def(py::init<const std::string&, RTEngineType, bool>())
+		.def(py::init<const std::string &, bool>())
+		.def_property_readonly("batchsize", &RTEngine::getBatchSize)
+		.def_property_readonly("inshape", &RTEngine::getInshape)
+		.def_property_readonly("outshape", &RTEngine::getOutshape)
 		.def("enqueue", &RTEngine::enqueue);
 }

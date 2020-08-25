@@ -31,7 +31,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 	memoryPool, prelumod = backend.memoryPool, backend.prelumod
 
 	def wrapPRelu(data, slopes, inplace, sharedMaps):

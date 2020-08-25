@@ -69,7 +69,7 @@ def initHip():
 
 
 def initGPU(Backend):
-	backend = Backend.getBackend(Config.deviceIdx, initmode=2)
+	backend = Backend.getBackend(Config.deviceIdx, initmode=2, logger=Config.getLogger())
 
 	global sigmoidKer, sigmoidDerKer, tanhKer, tanhDerKer, reluKer, reluDerKer, leakyReluKer, leakyReluDerKer
 	global eluKer, eluDerKer, softPlusKer, softPlusDerKer, clipKer, clipDerKer, geluKer, geluDerKer
