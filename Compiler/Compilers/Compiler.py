@@ -52,13 +52,15 @@ class Compiler:
 				libraryDirs = [os.path.join(bindir, "libs"), bindir]
 				libraries = ["python%s%s" % sys.version_info[:2]]
 
-		elif sys.platform == "linux":
-			oext, libext, soext = ".o", ".a", ".so"
+		elif sys.platform in ("linux", "darwin"):
+			oext, libext, soext = ".o", ".a", (".so" if sys.platform == "linux" else ".dylib")
 			linkext, debugext = [], []
 
 			if forPython:
 				libraryDirs = [config["LIBDIR"]]
-				libraries = ["python%s.%sm" % sys.version_info[:2]]
+
+				(major, minor), mext = sys.version_info[:2], "m" if sys.platform == "linux" else ""
+				libraries = ["python%s.%s%s" % (major, minor, mext)]
 
 		else:
 			raise NotImplementedError(sys.platform)

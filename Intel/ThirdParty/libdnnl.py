@@ -2,7 +2,7 @@ import ctypes
 from PuzzleLib.Intel.ThirdParty.finddnnl import findDNNL
 
 
-_libdnnl = findDNNL()
+_, _libdnnl = findDNNL()
 
 
 class dnnlError(Exception):

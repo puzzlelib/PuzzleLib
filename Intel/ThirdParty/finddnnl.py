@@ -9,7 +9,7 @@ def findDNNL():
 		libnames += ["/usr/local/lib/%s" % libname for libname in libnames]
 
 	elif sys.platform == "darwin":
-		libnames = ["libdnnl.%s.dylib" % v for v in versions]
+		libnames = ["/usr/local/lib/libdnnl.%s.dylib" % v for v in versions]
 
 	elif sys.platform == "win32":
 		libpaths = [
@@ -32,6 +32,6 @@ def findDNNL():
 			pass
 
 		else:
-			return clib
+			return libname, clib
 
 	raise OSError("dnnl library not found (searched for following version(s): %s)" % versions)

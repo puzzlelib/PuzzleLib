@@ -239,7 +239,7 @@ class InstallCommand(install):
 		from PuzzleLib.Intel.ThirdParty.finddnnl import findDNNL
 
 		print("\nChecking dnnl installation ...")
-		lib = findDNNL()
+		lib, _ = findDNNL();
 
 		if os.path.commonpath([dst, lib]) == dst:
 			data = {pathToPackageName(dst): [lib]}
