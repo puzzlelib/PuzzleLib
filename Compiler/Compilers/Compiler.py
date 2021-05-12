@@ -60,7 +60,7 @@ class Compiler:
 				libraryDirs = [config["LIBDIR"]]
 
 				(major, minor), mext = sys.version_info[:2], "m" if sys.platform == "linux" else ""
-				libraries = ["python%s.%s%s" % (major, minor, mext)]
+				libraries = ["python%s.%s%s" % (major, minor, mext if minor < 8 else "")]
 
 		else:
 			raise NotImplementedError(sys.platform)
