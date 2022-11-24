@@ -4,7 +4,7 @@
 
 ## Installation
 
-For detailed instructions on how to install the library and dependencies, see the documentation for [Windows](https://docs.puzzlelib.org/documentation/general/installation/windows/) and [Linux/macOS](https://docs.puzzlelib.org/documentation/general/installation/linux/) installation.
+For detailed instructions on how to install the library and dependencies, see the documentation for [Windows](https://puzzlelib.org/documentation/general/installation/windows/) and [Linux/macOS](https://puzzlelib.org/documentation/general/installation/linux/) installation.
 
 PuzzleLib supports:
 
@@ -16,7 +16,7 @@ PuzzleLib supports:
 
 ## Documentation
 
-https://docs.puzzlelib.org
+https://puzzlelib.org
 
 
 ## License
@@ -30,7 +30,7 @@ ___
 
 ## Установка
 
-Для детальных инструкций по установке библиотеки и её зависимостей смотрите документацию: установка на [Windows](https://docs.puzzlelib.org/documentation/general/installation/windows/) и на [Linux/macOS](https://docs.puzzlelib.org/documentation/general/installation/linux/).
+Для детальных инструкций по установке библиотеки и её зависимостей смотрите документацию: установка на [Windows](https://puzzlelib.org/documentation/general/installation/windows/) и на [Linux/macOS](https://puzzlelib.org/documentation/general/installation/linux/).
 
 PuzzleLib поддерживает:
 
@@ -42,7 +42,7 @@ PuzzleLib поддерживает:
 
 ## Документация
 
-https://docs.puzzlelib.org
+https://puzzlelib.org
 
 
 ## Лицензия
