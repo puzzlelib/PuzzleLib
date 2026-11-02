@@ -1,6 +1,6 @@
 # PuzzleLib
 
-PuzzleLib is a high level Deep Learning framework with CPU (Intel/AMD) and GPU (NVIDIA/AMD) support. The library is written in Python, it is modular and dynamic.
+[PuzzleLib](https://ashmanov.net/puzzleliband) is a high level Deep Learning framework with CPU (Intel/AMD) and GPU (NVIDIA/AMD) support. The library is written in Python, it is modular and dynamic.
 
 ## Installation
 
