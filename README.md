@@ -1,10 +1,10 @@
 # PuzzleLib
 
-[PuzzleLib](https://puzzlelib.org) is a high level Deep Learning framework with CPU (Intel/AMD) and GPU (NVIDIA/AMD) support. The library is written in Python, it is modular and dynamic.
+PuzzleLib is a high level Deep Learning framework with CPU (Intel/AMD) and GPU (NVIDIA/AMD) support. The library is written in Python, it is modular and dynamic.
 
 ## Installation
 
-For detailed instructions on how to install the library and dependencies, see the documentation for [Windows](https://puzzlelib.org/ru/documentation/general/installation/windows/) and [Linux/macOS](https://puzzlelib.org/ru/documentation/general/installation/linux/) installation.
+For detailed instructions on how to install the library and dependencies, see the documentation for [Windows](https://ashmanov.net/puzzleliband) [Linux/macOS](https://ashmanov.net/puzzleliband) installation.
 
 PuzzleLib supports:
 
@@ -13,12 +13,6 @@ PuzzleLib supports:
 *	Intel CPU (mkl-dnn backend);
 *	AMD CPU (numpy backend).
 
-
-## Documentation
-
-https://puzzlelib.org
-
-
 ## License
 
 [Apache License 2.0](LICENSE)
@@ -26,11 +20,11 @@ https://puzzlelib.org
 ___
 # PuzzleLib
 
-[PuzzleLib](https://puzzlelib.org) - это библиотека для построения нейронных сетей с поддержкой вычислений на CPU (Intel/AMD) и GPU (NVIDIA/AMD). Библиотека модульная и динамическая, написана на языке Python.
+[PuzzleLib](https://ashmanov.net/puzzleliband) - это библиотека для построения нейронных сетей с поддержкой вычислений на CPU (Intel/AMD) и GPU (NVIDIA/AMD). Библиотека модульная и динамическая, написана на языке Python.
 
 ## Установка
 
-Для детальных инструкций по установке библиотеки и её зависимостей смотрите документацию: установка на [Windows](https://puzzlelib.org/ru/documentation/general/installation/windows/) и на [Linux/macOS](https://puzzlelib.org/ru/documentation/general/installation/linux/).
+Для детальных инструкций по установке библиотеки и её зависимостей смотрите документацию: установка на [Windows](https://ashmanov.net/puzzleliband) и на [Linux/macOS](https://ashmanov.net/puzzleliband).
 
 PuzzleLib поддерживает:
 
@@ -38,11 +32,6 @@ PuzzleLib поддерживает:
 *	AMD GPU (ROCm backend);
 *	Intel CPU (mkl-dnn backend);
 *	AMD CPU (numpy backend).
-
-
-## Документация
-
-https://puzzlelib.org
 
 
 ## Лицензия
